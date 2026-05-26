@@ -27,6 +27,6 @@ object SparkSortShuffleWriterUtil {
       context: TaskContext,
       writeMetrics: ShuffleWriteMetricsReporter,
       shuffleExecutorComponents: ShuffleExecutorComponents): ShuffleWriter[K, V] = {
-    new SortShuffleWriter(handle, mapId, context, writeMetrics, shuffleExecutorComponents)
+    new SortShuffleWriter(handle, mapId, context, shuffleExecutorComponents)
   }
 }

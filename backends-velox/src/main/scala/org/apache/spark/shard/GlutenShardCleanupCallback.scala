@@ -14,16 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.gluten.sql.shims.spark34
+package org.apache.spark.shard
 
-import org.apache.gluten.sql.shims.SparkShims
+import org.apache.spark.internal.Logging
 
-object SparkShimProvider {
-  val DESCRIPTOR = SparkShimDescriptor(3, 4, 2)
-}
+/** Cleanup callback for shard sets. */
+object GlutenShardCleanupCallback extends Logging {
 
-class SparkShimProvider extends org.apache.gluten.sql.shims.SparkShimProvider {
-  def createShim: SparkShims = {
-    new Spark34Shims()
+  def onShardSetRemoved(setId: Long): Unit = {
+    try {
+      GlutenShardManagerJni.destroyShardTable(setId)
+      logInfo(s"Successfully destroyed native shard table for setId=$setId")
+    } catch {
+      case e: Exception =>
+        logWarning(s"Failed to destroy native shard table for setId=$setId", e)
+    }
   }
 }
