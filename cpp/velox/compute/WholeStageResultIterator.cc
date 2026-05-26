@@ -26,9 +26,11 @@
 #include "compute/delta/DeltaSplit.h"
 #include "compute/delta/DeltaSplitInfo.h"
 #include "config/VeloxConfig.h"
+#include "shard/ShardLookupJoinNode.h"
 #include "utils/ConfigExtractor.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #ifdef GLUTEN_ENABLE_GPU
@@ -389,6 +391,31 @@ void WholeStageResultIterator::getOrderedNodeIds(
       // The LocalPartition maps to a concrete Spark native union transformer operator.
       nodeIds.emplace_back(planNode->id());
     }
+    return;
+  }
+
+  // IndexLookupJoinNode: only recurse into the probe (left) child.
+  // The lookup scan (right) child is handled internally by the
+  // IndexLookupJoin operator via the connector, so it has no separate
+  // operator stats in the task pipeline.
+  auto indexLookupJoin =
+      std::dynamic_pointer_cast<const velox::core::IndexLookupJoinNode>(planNode);
+  if (indexLookupJoin) {
+    // Only the left (probe) child is part of the pipeline.
+    getOrderedNodeIds(sourceNodes.at(0), nodeIds);
+    // Omit the lookup scan node so metrics collection does not fail.
+    omittedNodeIds_.insert(indexLookupJoin->lookupSource()->id());
+    nodeIds.emplace_back(planNode->id());
+    return;
+  }
+
+  // ShardLookupJoinNode: only recurse into the probe (left) child.
+  // The build side is served by remote shard servers and is not a plan child.
+  auto shardLookupJoin =
+      std::dynamic_pointer_cast<const gluten::shard::ShardLookupJoinNode>(planNode);
+  if (shardLookupJoin) {
+    getOrderedNodeIds(sourceNodes.at(0), nodeIds);
+    nodeIds.emplace_back(planNode->id());
     return;
   }
 

@@ -27,6 +27,9 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/type/Type.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
+
+#include "shard/ShardLookupJoinNode.h"
 
 #include "utils/ConfigExtractor.h"
 #include "utils/ObjectStore.h"
@@ -124,6 +127,58 @@ RowTypePtr getJoinInputType(const core::PlanNodePtr& leftNode, const core::PlanN
     outputTypes.insert(outputTypes.end(), types.begin(), types.end());
   }
   return std::make_shared<const RowType>(std::move(outputNames), std::move(outputTypes));
+}
+
+/// Overload that accepts RowTypePtrs directly (used by ShardLookupJoin where
+/// the build side has no PlanNode).
+RowTypePtr getJoinInputType(const RowTypePtr& leftType, const RowTypePtr& rightType) {
+  auto outputSize = leftType->size() + rightType->size();
+  std::vector<std::string> outputNames;
+  std::vector<std::shared_ptr<const Type>> outputTypes;
+  outputNames.reserve(outputSize);
+  outputTypes.reserve(outputSize);
+  for (const auto& type : {leftType, rightType}) {
+    const auto& names = type->names();
+    outputNames.insert(outputNames.end(), names.begin(), names.end());
+    const auto& types = type->children();
+    outputTypes.insert(outputTypes.end(), types.begin(), types.end());
+  }
+  return std::make_shared<const RowType>(std::move(outputNames), std::move(outputTypes));
+}
+
+/// Overload that accepts RowTypePtrs directly (used by ShardLookupJoin).
+RowTypePtr getJoinOutputType(
+    const RowTypePtr& leftType,
+    const RowTypePtr& rightType,
+    const core::JoinType& joinType) {
+  bool outputMayIncludeLeftColumns = !(core::isRightSemiFilterJoin(joinType) || core::isRightSemiProjectJoin(joinType));
+  bool outputMayIncludeRightColumns =
+      !(core::isLeftSemiFilterJoin(joinType) || core::isLeftSemiProjectJoin(joinType) || core::isAntiJoin(joinType));
+
+  if (outputMayIncludeLeftColumns && outputMayIncludeRightColumns) {
+    return getJoinInputType(leftType, rightType);
+  }
+  if (outputMayIncludeLeftColumns) {
+    if (core::isLeftSemiProjectJoin(joinType)) {
+      std::vector<std::string> outputNames = leftType->names();
+      std::vector<std::shared_ptr<const Type>> outputTypes = leftType->children();
+      outputNames.emplace_back("exists");
+      outputTypes.emplace_back(BOOLEAN());
+      return std::make_shared<const RowType>(std::move(outputNames), std::move(outputTypes));
+    }
+    return leftType;
+  }
+  if (outputMayIncludeRightColumns) {
+    if (core::isRightSemiProjectJoin(joinType)) {
+      std::vector<std::string> outputNames = rightType->names();
+      std::vector<std::shared_ptr<const Type>> outputTypes = rightType->children();
+      outputNames.emplace_back("exists");
+      outputTypes.emplace_back(BOOLEAN());
+      return std::make_shared<const RowType>(std::move(outputNames), std::move(outputTypes));
+    }
+    return rightType;
+  }
+  VELOX_FAIL("Output should include left or right columns.");
 }
 
 /// @brief Get the direct output type of join.
@@ -363,6 +418,44 @@ std::string SubstraitToVeloxPlanConverter::toAggregationFunctionName(
   return baseName + suffix;
 }
 
+namespace {
+// Parse per-shard location map:
+// "0=host1:port1|host2:port2,1=host3:port3,..."
+// Each entry is shardId=location1|location2|... with '|' separating
+// multiple replicas and ',' separating shards.
+std::unordered_map<int32_t, std::vector<gluten::shard::ShardServerLocation>>
+parseShardLocationMap(const std::string& mapStr) {
+  std::unordered_map<int32_t, std::vector<gluten::shard::ShardServerLocation>>
+      result;
+  std::stringstream ss(mapStr);
+  std::string entry;
+  while (std::getline(ss, entry, ',')) {
+    auto eqPos = entry.find('=');
+    VELOX_CHECK(
+        eqPos != std::string::npos,
+        "Invalid shardLocationMap entry: {}",
+        entry);
+    auto shardId = std::stoi(entry.substr(0, eqPos));
+    auto locsStr = entry.substr(eqPos + 1);
+    std::vector<gluten::shard::ShardServerLocation> locs;
+    std::stringstream locSs(locsStr);
+    std::string locToken;
+    while (std::getline(locSs, locToken, '|')) {
+      auto colonPos = locToken.rfind(':');
+      VELOX_CHECK(
+          colonPos != std::string::npos,
+          "Invalid server location format: {}",
+          locToken);
+      auto host = locToken.substr(0, colonPos);
+      auto port = std::stoi(locToken.substr(colonPos + 1));
+      locs.emplace_back(std::move(host), port);
+    }
+    result[shardId] = std::move(locs);
+  }
+  return result;
+}
+} // namespace
+
 core::PlanNodePtr SubstraitToVeloxPlanConverter::toVeloxPlan(const ::substrait::JoinRel& sJoin) {
   if (!sJoin.has_left()) {
     VELOX_FAIL("Left Rel is expected in JoinRel.");
@@ -371,8 +464,36 @@ core::PlanNodePtr SubstraitToVeloxPlanConverter::toVeloxPlan(const ::substrait::
     VELOX_FAIL("Right Rel is expected in JoinRel.");
   }
 
+  // Detect ShardLookupJoin early, before recursing into the right (build)
+  // side, because the build RelNode is a schema-only placeholder that cannot
+  // be converted to a normal Velox plan node.
+  const bool isShardLookupJoin = sJoin.has_advanced_extension() &&
+      SubstraitParser::configSetInOptimization(sJoin.advanced_extension(), "isShardLookupJoin=");
+
   auto leftNode = toVeloxPlan(sJoin.left());
-  auto rightNode = toVeloxPlan(sJoin.right());
+
+  // For ShardLookupJoin the build (right) side is served by the native shard
+  // server.  Extract the build output type directly from the Substrait schema
+  // instead of recursing into toVeloxPlan which would require split info.
+  core::PlanNodePtr rightNode;
+  RowTypePtr buildOutputType;
+  if (isShardLookupJoin) {
+    // Parse build schema from the right ReadRel's base_schema.
+    VELOX_CHECK(sJoin.right().has_read(), "ShardLookupJoin expects a ReadRel on the right side.");
+    const auto& readRel = sJoin.right().read();
+    VELOX_CHECK(readRel.has_base_schema(), "ShardLookupJoin right ReadRel must have base_schema.");
+    const auto& baseSchema = readRel.base_schema();
+    std::vector<std::string> colNames;
+    colNames.reserve(baseSchema.names().size());
+    for (const auto& name : baseSchema.names()) {
+      colNames.emplace_back(name);
+    }
+    auto veloxTypes = SubstraitParser::parseNamedStruct(baseSchema);
+    buildOutputType = ROW(std::move(colNames), std::move(veloxTypes));
+  } else {
+    rightNode = toVeloxPlan(sJoin.right());
+    buildOutputType = rightNode->outputType();
+  }
 
   // Map join type.
   core::JoinType joinType;
@@ -427,10 +548,15 @@ core::PlanNodePtr SubstraitToVeloxPlanConverter::toVeloxPlan(const ::substrait::
   VELOX_CHECK_EQ(leftExprs.size(), rightExprs.size());
   size_t numKeys = leftExprs.size();
 
+  // For ShardLookupJoin, construct inputRowType from leftNode + buildOutputType
+  // instead of using rightNode (which is null).
+  auto inputRowType = isShardLookupJoin
+      ? getJoinInputType(leftNode->outputType(), buildOutputType)
+      : getJoinInputType(leftNode, rightNode);
+
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> leftKeys, rightKeys;
   leftKeys.reserve(numKeys);
   rightKeys.reserve(numKeys);
-  auto inputRowType = getJoinInputType(leftNode, rightNode);
   for (size_t i = 0; i < numKeys; ++i) {
     leftKeys.emplace_back(exprConverter_->toVeloxExpr(*leftExprs[i], inputRowType));
     rightKeys.emplace_back(exprConverter_->toVeloxExpr(*rightExprs[i], inputRowType));
@@ -439,6 +565,70 @@ core::PlanNodePtr SubstraitToVeloxPlanConverter::toVeloxPlan(const ::substrait::
   core::TypedExprPtr filter;
   if (sJoin.has_post_join_filter()) {
     filter = exprConverter_->toVeloxExpr(sJoin.post_join_filter(), inputRowType);
+  }
+
+  // ShardLookupJoin (DistributedMapJoin native path)
+  if (isShardLookupJoin) {
+    auto shardSetIdStr = SubstraitParser::getConfigSetInOptimization(
+        sJoin.advanced_extension(), "shardSetId=");
+    VELOX_CHECK(shardSetIdStr.has_value(), "shardSetId is required for ShardLookupJoin");
+    auto shardSetId = std::stol(shardSetIdStr.value());
+
+    auto numShardsStr = SubstraitParser::getConfigSetInOptimization(
+        sJoin.advanced_extension(), "numShards=");
+    VELOX_CHECK(numShardsStr.has_value(), "numShards is required for ShardLookupJoin");
+    auto numShards = std::stoi(numShardsStr.value());
+
+    auto shardLocMapStr = SubstraitParser::getConfigSetInOptimization(
+        sJoin.advanced_extension(), "shardLocationMap=");
+    VELOX_CHECK(shardLocMapStr.has_value(), "shardLocationMap is required for ShardLookupJoin");
+    auto shardLocationMap = parseShardLocationMap(shardLocMapStr.value());
+
+    // Parse optional tuning parameters.
+    int32_t maxInflightRpcs = 8;
+    auto maxInflightStr = SubstraitParser::getConfigSetInOptimization(
+        sJoin.advanced_extension(), "maxInflightRpcs=");
+    if (maxInflightStr.has_value()) {
+      maxInflightRpcs = std::stoi(maxInflightStr.value());
+    }
+
+    int32_t maxBatchSize = 1024;
+    auto maxBatchStr = SubstraitParser::getConfigSetInOptimization(
+        sJoin.advanced_extension(), "maxBatchSize=");
+    if (maxBatchStr.has_value()) {
+      maxBatchSize = std::stoi(maxBatchStr.value());
+    }
+
+    // Parse hash key schema for shard routing (tells probe side which types
+    // were used for hash partitioning, e.g., "struct<hk0:bigint>").
+    RowTypePtr hashKeyType;
+    auto hashKeySchemaStr = SubstraitParser::getConfigSetInOptimization(
+        sJoin.advanced_extension(), "hashKeySchema=");
+    if (hashKeySchemaStr.has_value() && !hashKeySchemaStr.value().empty()) {
+      facebook::velox::type::fbhive::HiveTypeParser typeParser;
+      auto parsed = typeParser.parse(hashKeySchemaStr.value());
+      hashKeyType = std::dynamic_pointer_cast<const RowType>(parsed);
+    }
+
+    // Compute output type for the shard lookup join.
+    auto outputType = getJoinOutputType(
+        leftNode->outputType(), buildOutputType, joinType);
+
+    return std::make_shared<gluten::shard::ShardLookupJoinNode>(
+        nextPlanNodeId(),
+        joinType,
+        leftKeys,
+        rightKeys,
+        leftNode,
+        buildOutputType,
+        outputType,
+        shardSetId,
+        numShards,
+        std::move(shardLocationMap),
+        maxInflightRpcs,
+        maxBatchSize,
+        std::move(hashKeyType),
+        filter);
   }
 
   if (sJoin.has_advanced_extension() &&

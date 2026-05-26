@@ -31,7 +31,7 @@ import org.apache.spark.sql.execution.RDDScanTransformer
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.datasources.WriteFilesExec
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
-import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec}
+import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShardExchangeExec, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins._
 import org.apache.spark.sql.execution.python.{ArrowEvalPythonExec, BatchEvalPythonExec, EvalPythonExecTransformer}
 import org.apache.spark.sql.execution.window.WindowExec
@@ -49,6 +49,9 @@ case class OffloadExchange() extends OffloadSingleNode with LogLevelUtil {
       val child = b.child
       logDebug(s"Columnar Processing for ${b.getClass} is currently supported.")
       ColumnarBroadcastExchangeExec(b.mode, child)
+    case se: ShardExchangeExec =>
+      logDebug(s"Columnar Processing for ${se.getClass} is currently supported.")
+      BackendsApiManager.getSparkPlanExecApiInstance.genColumnarShardExchange(se)
     case other => other
   }
 }
@@ -99,6 +102,30 @@ case class OffloadJoin() extends OffloadSingleNode with LogLevelUtil {
             left,
             right,
             isNullAwareAntiJoin = plan.isNullAwareAntiJoin)
+      case plan: DistributedMapJoinExec =>
+        import org.apache.spark.sql.catalyst.plans.{InnerLike, LeftOuter}
+        plan.joinType match {
+          case _: InnerLike | LeftOuter => // supported by native path
+          case u =>
+            throw new UnsupportedOperationException(
+              s"DistributedMapJoin does not support join type '$u' with Gluten enabled. " +
+                s"Please either remove the DISTMAPJOIN hint or disable Gluten " +
+                s"(set spark.gluten.enabled=false) for this query.")
+        }
+        val left = plan.left
+        val right = plan.right
+        logDebug(s"Columnar Processing for ${plan.getClass} is currently supported.")
+        BackendsApiManager.getSparkPlanExecApiInstance
+          .genDistributedMapJoinExecTransformer(
+            plan.leftKeys,
+            plan.rightKeys,
+            plan.joinType,
+            plan.buildSide,
+            plan.condition,
+            left,
+            right,
+            plan.hint,
+            plan.isNullAwareAntiJoin)
       case plan: CartesianProductExec =>
         val left = plan.left
         val right = plan.right

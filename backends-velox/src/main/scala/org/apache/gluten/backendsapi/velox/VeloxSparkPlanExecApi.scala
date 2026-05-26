@@ -49,8 +49,9 @@ import org.apache.spark.sql.catalyst.plans.physical._
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AQEShuffleReadExec
 import org.apache.spark.sql.execution.datasources.FileFormat
-import org.apache.spark.sql.execution.exchange.ShuffleExchangeExec
+import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ColumnarShardExchangeExec, ShardExchangeExec, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins.{BuildSideRelation, HashedRelationBroadcastMode, SparkHashJoinUtils}
+import org.apache.spark.sql.execution.joins.DistributedMapJoinExecTransformer
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.python.ArrowEvalPythonExec
 import org.apache.spark.sql.execution.unsafe.UnsafeColumnarBuildSideRelation
@@ -476,6 +477,15 @@ class VeloxSparkPlanExecApi extends SparkPlanExecApi with Logging {
     newShuffle
   }
 
+  /** Generate columnar ShardExchange for DistributedMapJoin build side. */
+  override def genColumnarShardExchange(shardExchange: ShardExchangeExec): SparkPlan = {
+    ColumnarShardExchangeExec(
+      shardExchange.buildBoundKeys,
+      shardExchange.numShards,
+      shardExchange.replicaCount,
+      shardExchange.child)
+  }
+
   /** Generate ShuffledHashJoinExecTransformer. */
   override def genShuffledHashJoinExecTransformer(
       leftKeys: Seq[Expression],
@@ -514,6 +524,28 @@ class VeloxSparkPlanExecApi extends SparkPlanExecApi with Logging {
       condition,
       left,
       right,
+      isNullAwareAntiJoin)
+
+  /** Generate DistributedMapJoinExecTransformer. */
+  override def genDistributedMapJoinExecTransformer(
+      leftKeys: Seq[Expression],
+      rightKeys: Seq[Expression],
+      joinType: JoinType,
+      buildSide: BuildSide,
+      condition: Option[Expression],
+      left: SparkPlan,
+      right: SparkPlan,
+      hint: org.apache.spark.sql.catalyst.plans.logical.JoinHint,
+      isNullAwareAntiJoin: Boolean = false): SparkPlan =
+    DistributedMapJoinExecTransformer(
+      leftKeys,
+      rightKeys,
+      joinType,
+      buildSide,
+      condition,
+      left,
+      right,
+      hint,
       isNullAwareAntiJoin)
 
   override def genSampleExecTransformer(

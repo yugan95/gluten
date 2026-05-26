@@ -244,6 +244,16 @@ if(BUILD_TEST_UTILS)
        tests/utils/TestAllocationListener.cc)
 endif()
 
+# Shard lookup components for DistributedMapJoin (must be before add_library
+# so that shard sources are appended to VELOX_SRCS).
+# gRPC and its transitive dependencies (absl, re2) are statically linked into
+# libvelox.so so that the deployment package is self-contained.
+list(APPEND CMAKE_PREFIX_PATH "/usr/local/lib64/cmake")
+set(Protobuf_USE_STATIC_LIBS ON)
+find_package(Protobuf REQUIRED)
+find_package(gRPC REQUIRED)
+add_subdirectory(shard)
+
 add_library(velox SHARED ${VELOX_SRCS})
 
 # Keep ABI sensitive Velox feature macros in sync
@@ -556,3 +566,9 @@ add_custom_command(
   POST_BUILD
   COMMAND ldd $<TARGET_FILE:velox> || true
   COMMENT "Checking ldd result of libvelox.so")
+
+# Shard lookup: add include dirs and link gRPC/protobuf libs to velox target.
+if(SHARD_INCLUDE_DIRS)
+  target_include_directories(velox PUBLIC ${SHARD_INCLUDE_DIRS})
+  target_link_libraries(velox PUBLIC gRPC::grpc++ protobuf::libprotobuf)
+endif()

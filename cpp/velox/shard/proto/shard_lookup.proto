@@ -1,0 +1,136 @@
+// Protocol buffer definition for ShardServer gRPC lookup service.
+// Used by ShardLookupJoin (probe side) to issue batched async remote lookups.
+
+syntax = "proto3";
+
+package gluten.shard.proto;
+
+option java_package = "org.apache.gluten.shard.proto";
+option java_outer_classname = "ShardLookupProto";
+
+// ---------------------------------------------------------------------------
+// ShardLookupService – served by each executor's ShardServer.
+// ---------------------------------------------------------------------------
+service ShardLookupService {
+  // Perform a batched index lookup against a local shard hash table.
+  rpc Lookup(LookupRequest) returns (LookupResponse);
+
+  // Perform lookups against multiple shards in a single RPC call.
+  // This reduces RPC count when an executor hosts many shards: instead of
+  // one RPC per shard, the client groups all shards on the same remote
+  // address into one BatchLookup call.  For 200 shards across 10 machines,
+  // this cuts RPC count from 200 to 10 per probe batch.
+  rpc BatchLookup(BatchLookupRequest) returns (BatchLookupResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+// Probe-side lookup request.
+message LookupRequest {
+  // Shard set identifier (matches ShardSetRef.setId on the Spark side).
+  int64 set_id = 1;
+
+  // Target shard within the set.
+  int32 shard_id = 2;
+
+  // Probe key columns serialized in CompactRow wire format.
+  //
+  // Wire format (see CompactRowWireFormat.h for definitive spec):
+  //   [magic: uint32  = 0x434F4D31 ("COM1") | LE]
+  //   [version: uint32 | LE]
+  //   [numRows: uint32 | LE]
+  //   For each row:
+  //     [length: uint32 | LE]
+  //     [CompactRow bytes (length bytes)]
+  //
+  // The schema (RowType) is NOT carried on the wire; the server reconstructs
+  // it from VeloxShardManager::getKeyType(setId, shardId).  This keeps the
+  // payload tight (no per-RPC schema overhead) at the cost of requiring
+  // build/probe to share the same key schema definition.
+  bytes probe_keys_compact = 3;
+
+  // Original row indices in the probe batch that correspond to each row in
+  // probe_keys_compact.  Used to reconstruct the join output ordering.
+  repeated int32 input_indices = 4;
+
+  // --- Server-side join condition eval (filter pushdown) ---
+  // TODO(perf): filter_expression / probe_columns_type / filter_input_type
+  // are identical across all RPCs for the same ShardLookupJoin operator.
+  // A future optimization is to distribute them once during the
+  // ColumnarShardExchange build phase and have the server pre-compile,
+  // eliminating per-RPC overhead.
+
+  // Probe columns referenced by the join condition, serialized in CompactRow
+  // wire format.  Only columns actually used by the filter expression are
+  // included (not the full probe row) to minimize payload.
+  bytes probe_filter_columns_compact = 5;
+
+  // Join condition (non-equi part) serialized as Velox ITypedExpr JSON
+  // (ISerializable::serialize → folly::toJson).
+  string filter_expression = 6;
+
+  // RowType of probe_filter_columns_compact in Hive format
+  // (e.g. "struct<pid:string>").  Needed by the server to deserialize
+  // the probe filter columns.
+  string probe_columns_type = 7;
+
+  // Full input schema for filter evaluation in Hive format:
+  // concat(probe filter columns type, build output type).
+  // Needed by the server to compile the ExprSet.
+  string filter_input_type = 8;
+}
+
+// Lookup response from the build-side executor.
+message LookupResponse {
+  // Matched build-side rows serialized in CompactRow wire format.
+  // Empty bytes if there are no matches; never partially populated.
+  // See LookupRequest.probe_keys_compact for the wire format spec.
+  bytes output_compact = 1;
+
+  // For each matched build row, the original probe row index (from
+  // input_indices) that produced the match.
+  repeated int32 input_hits = 2;
+}
+
+// ---------------------------------------------------------------------------
+// BatchLookup messages – multi-shard RPC coalescing.
+//
+// Instead of sending one Lookup RPC per shard, the client groups all shards
+// hosted on the same remote address into a single BatchLookup call.
+// For 200 shards across 10 machines this cuts RPC count from 200 to 10.
+// ---------------------------------------------------------------------------
+
+// A single shard's lookup request within a batch.
+message ShardLookupEntry {
+  int32 shard_id = 1;
+  bytes probe_keys_compact = 2;
+  repeated int32 input_indices = 3;
+
+  // Server-side join condition eval fields (same semantics as LookupRequest).
+  bytes probe_filter_columns_compact = 4;
+  string filter_expression = 5;
+  string probe_columns_type = 6;
+  string filter_input_type = 7;
+}
+
+// A single shard's lookup response within a batch.
+message ShardLookupResultEntry {
+  int32 shard_id = 1;
+  bytes output_compact = 2;
+  repeated int32 input_hits = 3;
+}
+
+// Multi-shard lookup request: all shards share the same set_id and are
+// hosted on the same remote executor.
+message BatchLookupRequest {
+  int64 set_id = 1;
+  repeated ShardLookupEntry entries = 2;
+}
+
+// Multi-shard lookup response: one result entry per requested shard.
+// Entries with no matches may be omitted or have empty output_compact.
+message BatchLookupResponse {
+  repeated ShardLookupResultEntry results = 1;
+}
