@@ -22,6 +22,7 @@
 
 #include "operators/functions/RegistrationAllFunctions.h"
 #include "operators/plannodes/RowVectorStream.h"
+#include "shard/ShardLookupJoin.h"
 #include "utils/ConfigExtractor.h"
 
 #ifdef GLUTEN_ENABLE_QAT
@@ -176,6 +177,8 @@ void VeloxBackend::init(
     facebook::velox::serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
   velox::exec::Operator::registerOperator(std::make_unique<RowVectorStreamOperatorTranslator>());
+  velox::exec::Operator::registerOperator(
+      std::make_unique<shard::ShardLookupJoinTranslator>());
 
   initUdf();
 

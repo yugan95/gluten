@@ -36,7 +36,7 @@ import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, Partitioning
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.datasources.FileFormat
 import org.apache.spark.sql.execution.datasources.v2.FileScan
-import org.apache.spark.sql.execution.exchange.ShuffleExchangeExec
+import org.apache.spark.sql.execution.exchange.{ShardExchangeExec, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins.BuildSideRelation
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.python.ArrowEvalPythonExec
@@ -86,6 +86,12 @@ trait SparkPlanExecApi {
 
   def genColumnarShuffleExchange(shuffle: ShuffleExchangeExec): SparkPlan
 
+  /** Generate columnar ShardExchange for DistributedMapJoin build side. */
+  def genColumnarShardExchange(shardExchange: ShardExchangeExec): SparkPlan = {
+    // Default: no columnar shard exchange support, keep original.
+    shardExchange
+  }
+
   /** Generate ShuffledHashJoinExecTransformer. */
   def genShuffledHashJoinExecTransformer(
       leftKeys: Seq[Expression],
@@ -114,6 +120,18 @@ trait SparkPlanExecApi {
       withReplacement: Boolean,
       seed: Long,
       child: SparkPlan): SampleExecTransformer
+
+  /** Generate DistributedMapJoinExecTransformer. */
+  def genDistributedMapJoinExecTransformer(
+      leftKeys: Seq[Expression],
+      rightKeys: Seq[Expression],
+      joinType: JoinType,
+      buildSide: BuildSide,
+      condition: Option[Expression],
+      left: SparkPlan,
+      right: SparkPlan,
+      hint: org.apache.spark.sql.catalyst.plans.logical.JoinHint,
+      isNullAwareAntiJoin: Boolean = false): SparkPlan
 
   /** Generate ShuffledHashJoinExecTransformer. */
   def genSortMergeJoinExecTransformer(

@@ -26,8 +26,8 @@ import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide
 import org.apache.spark.sql.catalyst.plans.{JoinType, LeftSemi}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, BroadcastQueryStageExec}
-import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, BroadcastExchangeLike, ShuffleExchangeLike}
+import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, BroadcastQueryStageExec, ShardQueryStageExec}
+import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, BroadcastExchangeLike, ShardExchangeLike, ShuffleExchangeLike}
 import org.apache.spark.sql.execution.joins.BroadcastNestedLoopJoinExec
 import org.apache.spark.sql.internal.SQLConf
 
@@ -146,6 +146,7 @@ object MiscColumnarRules {
         // See: org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec#newQueryStage
         case ColumnarToRowLike(child: ShuffleExchangeLike) => child
         case ColumnarToRowLike(child: BroadcastExchangeLike) => child
+        case ColumnarToRowLike(child: ShardExchangeLike) => child
         // See: org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec#getFinalPhysicalPlan
         //  BroadQueryStageExec could be inside a C2R which may cause check failures. E.g.,
         //  org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec#doExecuteBroadcast
@@ -153,6 +154,7 @@ object MiscColumnarRules {
         //  ShuffleQueryStageExec. Also there is not check like the one for BroadcastQueryStageExec
         //  so it's safe to keep it.
         case ColumnarToRowLike(child: BroadcastQueryStageExec) => child
+        case ColumnarToRowLike(child: ShardQueryStageExec) => child
         case other => other
       }
     }
