@@ -28,6 +28,10 @@ PROTOBUF_CONSTEXPR LookupRequest::LookupRequest(
     /*decltype(_impl_.input_indices_)*/{}
   , /*decltype(_impl_._input_indices_cached_byte_size_)*/{0}
   , /*decltype(_impl_.probe_keys_compact_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.probe_filter_columns_compact_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.filter_expression_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.probe_columns_type_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.filter_input_type_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.set_id_)*/int64_t{0}
   , /*decltype(_impl_.shard_id_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
@@ -60,6 +64,10 @@ PROTOBUF_CONSTEXPR ShardLookupEntry::ShardLookupEntry(
     /*decltype(_impl_.input_indices_)*/{}
   , /*decltype(_impl_._input_indices_cached_byte_size_)*/{0}
   , /*decltype(_impl_.probe_keys_compact_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.probe_filter_columns_compact_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.filter_expression_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.probe_columns_type_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.filter_input_type_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.shard_id_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct ShardLookupEntryDefaultTypeInternal {
@@ -132,6 +140,10 @@ const uint32_t TableStruct_shard_5flookup_2eproto::offsets[] PROTOBUF_SECTION_VA
   PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::LookupRequest, _impl_.shard_id_),
   PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::LookupRequest, _impl_.probe_keys_compact_),
   PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::LookupRequest, _impl_.input_indices_),
+  PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::LookupRequest, _impl_.probe_filter_columns_compact_),
+  PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::LookupRequest, _impl_.filter_expression_),
+  PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::LookupRequest, _impl_.probe_columns_type_),
+  PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::LookupRequest, _impl_.filter_input_type_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::LookupResponse, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -149,6 +161,10 @@ const uint32_t TableStruct_shard_5flookup_2eproto::offsets[] PROTOBUF_SECTION_VA
   PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::ShardLookupEntry, _impl_.shard_id_),
   PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::ShardLookupEntry, _impl_.probe_keys_compact_),
   PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::ShardLookupEntry, _impl_.input_indices_),
+  PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::ShardLookupEntry, _impl_.probe_filter_columns_compact_),
+  PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::ShardLookupEntry, _impl_.filter_expression_),
+  PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::ShardLookupEntry, _impl_.probe_columns_type_),
+  PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::ShardLookupEntry, _impl_.filter_input_type_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::gluten::shard::proto::ShardLookupResultEntry, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -176,11 +192,11 @@ const uint32_t TableStruct_shard_5flookup_2eproto::offsets[] PROTOBUF_SECTION_VA
 };
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::gluten::shard::proto::LookupRequest)},
-  { 10, -1, -1, sizeof(::gluten::shard::proto::LookupResponse)},
-  { 18, -1, -1, sizeof(::gluten::shard::proto::ShardLookupEntry)},
-  { 27, -1, -1, sizeof(::gluten::shard::proto::ShardLookupResultEntry)},
-  { 36, -1, -1, sizeof(::gluten::shard::proto::BatchLookupRequest)},
-  { 44, -1, -1, sizeof(::gluten::shard::proto::BatchLookupResponse)},
+  { 14, -1, -1, sizeof(::gluten::shard::proto::LookupResponse)},
+  { 22, -1, -1, sizeof(::gluten::shard::proto::ShardLookupEntry)},
+  { 35, -1, -1, sizeof(::gluten::shard::proto::ShardLookupResultEntry)},
+  { 44, -1, -1, sizeof(::gluten::shard::proto::BatchLookupRequest)},
+  { 52, -1, -1, sizeof(::gluten::shard::proto::BatchLookupResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -194,30 +210,36 @@ static const ::_pb::Message* const file_default_instances[] = {
 
 const char descriptor_table_protodef_shard_5flookup_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
   "\n\022shard_lookup.proto\022\022gluten.shard.proto"
-  "\"d\n\rLookupRequest\022\016\n\006set_id\030\001 \001(\003\022\020\n\010sha"
-  "rd_id\030\002 \001(\005\022\032\n\022probe_keys_compact\030\003 \001(\014\022"
-  "\025\n\rinput_indices\030\004 \003(\005\"<\n\016LookupResponse"
-  "\022\026\n\016output_compact\030\001 \001(\014\022\022\n\ninput_hits\030\002"
-  " \003(\005\"W\n\020ShardLookupEntry\022\020\n\010shard_id\030\001 \001"
-  "(\005\022\032\n\022probe_keys_compact\030\002 \001(\014\022\025\n\rinput_"
-  "indices\030\003 \003(\005\"V\n\026ShardLookupResultEntry\022"
-  "\020\n\010shard_id\030\001 \001(\005\022\026\n\016output_compact\030\002 \001("
-  "\014\022\022\n\ninput_hits\030\003 \003(\005\"[\n\022BatchLookupRequ"
-  "est\022\016\n\006set_id\030\001 \001(\003\0225\n\007entries\030\002 \003(\0132$.g"
-  "luten.shard.proto.ShardLookupEntry\"R\n\023Ba"
-  "tchLookupResponse\022;\n\007results\030\001 \003(\0132*.glu"
-  "ten.shard.proto.ShardLookupResultEntry2\305"
-  "\001\n\022ShardLookupService\022O\n\006Lookup\022!.gluten"
-  ".shard.proto.LookupRequest\032\".gluten.shar"
-  "d.proto.LookupResponse\022^\n\013BatchLookup\022&."
-  "gluten.shard.proto.BatchLookupRequest\032\'."
-  "gluten.shard.proto.BatchLookupResponseB1"
-  "\n\035org.apache.gluten.shard.protoB\020ShardLo"
-  "okupProtob\006proto3"
+  "\"\334\001\n\rLookupRequest\022\016\n\006set_id\030\001 \001(\003\022\020\n\010sh"
+  "ard_id\030\002 \001(\005\022\032\n\022probe_keys_compact\030\003 \001(\014"
+  "\022\025\n\rinput_indices\030\004 \003(\005\022$\n\034probe_filter_"
+  "columns_compact\030\005 \001(\014\022\031\n\021filter_expressi"
+  "on\030\006 \001(\t\022\032\n\022probe_columns_type\030\007 \001(\t\022\031\n\021"
+  "filter_input_type\030\010 \001(\t\"<\n\016LookupRespons"
+  "e\022\026\n\016output_compact\030\001 \001(\014\022\022\n\ninput_hits\030"
+  "\002 \003(\005\"\317\001\n\020ShardLookupEntry\022\020\n\010shard_id\030\001"
+  " \001(\005\022\032\n\022probe_keys_compact\030\002 \001(\014\022\025\n\rinpu"
+  "t_indices\030\003 \003(\005\022$\n\034probe_filter_columns_"
+  "compact\030\004 \001(\014\022\031\n\021filter_expression\030\005 \001(\t"
+  "\022\032\n\022probe_columns_type\030\006 \001(\t\022\031\n\021filter_i"
+  "nput_type\030\007 \001(\t\"V\n\026ShardLookupResultEntr"
+  "y\022\020\n\010shard_id\030\001 \001(\005\022\026\n\016output_compact\030\002 "
+  "\001(\014\022\022\n\ninput_hits\030\003 \003(\005\"[\n\022BatchLookupRe"
+  "quest\022\016\n\006set_id\030\001 \001(\003\0225\n\007entries\030\002 \003(\0132$"
+  ".gluten.shard.proto.ShardLookupEntry\"R\n\023"
+  "BatchLookupResponse\022;\n\007results\030\001 \003(\0132*.g"
+  "luten.shard.proto.ShardLookupResultEntry"
+  "2\305\001\n\022ShardLookupService\022O\n\006Lookup\022!.glut"
+  "en.shard.proto.LookupRequest\032\".gluten.sh"
+  "ard.proto.LookupResponse\022^\n\013BatchLookup\022"
+  "&.gluten.shard.proto.BatchLookupRequest\032"
+  "\'.gluten.shard.proto.BatchLookupResponse"
+  "B1\n\035org.apache.gluten.shard.protoB\020Shard"
+  "LookupProtob\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_shard_5flookup_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_shard_5flookup_2eproto = {
-    false, false, 817, descriptor_table_protodef_shard_5flookup_2eproto,
+    false, false, 1059, descriptor_table_protodef_shard_5flookup_2eproto,
     "shard_lookup.proto",
     &descriptor_table_shard_5flookup_2eproto_once, nullptr, 0, 6,
     schemas, file_default_instances, TableStruct_shard_5flookup_2eproto::offsets,
@@ -253,6 +275,10 @@ LookupRequest::LookupRequest(const LookupRequest& from)
       decltype(_impl_.input_indices_){from._impl_.input_indices_}
     , /*decltype(_impl_._input_indices_cached_byte_size_)*/{0}
     , decltype(_impl_.probe_keys_compact_){}
+    , decltype(_impl_.probe_filter_columns_compact_){}
+    , decltype(_impl_.filter_expression_){}
+    , decltype(_impl_.probe_columns_type_){}
+    , decltype(_impl_.filter_input_type_){}
     , decltype(_impl_.set_id_){}
     , decltype(_impl_.shard_id_){}
     , /*decltype(_impl_._cached_size_)*/{}};
@@ -264,6 +290,38 @@ LookupRequest::LookupRequest(const LookupRequest& from)
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   if (!from._internal_probe_keys_compact().empty()) {
     _this->_impl_.probe_keys_compact_.Set(from._internal_probe_keys_compact(), 
+      _this->GetArenaForAllocation());
+  }
+  _impl_.probe_filter_columns_compact_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.probe_filter_columns_compact_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_probe_filter_columns_compact().empty()) {
+    _this->_impl_.probe_filter_columns_compact_.Set(from._internal_probe_filter_columns_compact(), 
+      _this->GetArenaForAllocation());
+  }
+  _impl_.filter_expression_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.filter_expression_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_filter_expression().empty()) {
+    _this->_impl_.filter_expression_.Set(from._internal_filter_expression(), 
+      _this->GetArenaForAllocation());
+  }
+  _impl_.probe_columns_type_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.probe_columns_type_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_probe_columns_type().empty()) {
+    _this->_impl_.probe_columns_type_.Set(from._internal_probe_columns_type(), 
+      _this->GetArenaForAllocation());
+  }
+  _impl_.filter_input_type_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.filter_input_type_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_filter_input_type().empty()) {
+    _this->_impl_.filter_input_type_.Set(from._internal_filter_input_type(), 
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.set_id_, &from._impl_.set_id_,
@@ -280,6 +338,10 @@ inline void LookupRequest::SharedCtor(
       decltype(_impl_.input_indices_){arena}
     , /*decltype(_impl_._input_indices_cached_byte_size_)*/{0}
     , decltype(_impl_.probe_keys_compact_){}
+    , decltype(_impl_.probe_filter_columns_compact_){}
+    , decltype(_impl_.filter_expression_){}
+    , decltype(_impl_.probe_columns_type_){}
+    , decltype(_impl_.filter_input_type_){}
     , decltype(_impl_.set_id_){int64_t{0}}
     , decltype(_impl_.shard_id_){0}
     , /*decltype(_impl_._cached_size_)*/{}
@@ -287,6 +349,22 @@ inline void LookupRequest::SharedCtor(
   _impl_.probe_keys_compact_.InitDefault();
   #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
     _impl_.probe_keys_compact_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.probe_filter_columns_compact_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.probe_filter_columns_compact_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.filter_expression_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.filter_expression_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.probe_columns_type_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.probe_columns_type_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.filter_input_type_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.filter_input_type_.Set("", GetArenaForAllocation());
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
 }
 
@@ -303,6 +381,10 @@ inline void LookupRequest::SharedDtor() {
   GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
   _impl_.input_indices_.~RepeatedField();
   _impl_.probe_keys_compact_.Destroy();
+  _impl_.probe_filter_columns_compact_.Destroy();
+  _impl_.filter_expression_.Destroy();
+  _impl_.probe_columns_type_.Destroy();
+  _impl_.filter_input_type_.Destroy();
 }
 
 void LookupRequest::SetCachedSize(int size) const {
@@ -317,6 +399,10 @@ void LookupRequest::Clear() {
 
   _impl_.input_indices_.Clear();
   _impl_.probe_keys_compact_.ClearToEmpty();
+  _impl_.probe_filter_columns_compact_.ClearToEmpty();
+  _impl_.filter_expression_.ClearToEmpty();
+  _impl_.probe_columns_type_.ClearToEmpty();
+  _impl_.filter_input_type_.ClearToEmpty();
   ::memset(&_impl_.set_id_, 0, static_cast<size_t>(
       reinterpret_cast<char*>(&_impl_.shard_id_) -
       reinterpret_cast<char*>(&_impl_.set_id_)) + sizeof(_impl_.shard_id_));
@@ -362,6 +448,45 @@ const char* LookupRequest::_InternalParse(const char* ptr, ::_pbi::ParseContext*
         } else if (static_cast<uint8_t>(tag) == 32) {
           _internal_add_input_indices(::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr));
           CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // bytes probe_filter_columns_compact = 5;
+      case 5:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 42)) {
+          auto str = _internal_mutable_probe_filter_columns_compact();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // string filter_expression = 6;
+      case 6:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 50)) {
+          auto str = _internal_mutable_filter_expression();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "gluten.shard.proto.LookupRequest.filter_expression"));
+        } else
+          goto handle_unusual;
+        continue;
+      // string probe_columns_type = 7;
+      case 7:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 58)) {
+          auto str = _internal_mutable_probe_columns_type();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "gluten.shard.proto.LookupRequest.probe_columns_type"));
+        } else
+          goto handle_unusual;
+        continue;
+      // string filter_input_type = 8;
+      case 8:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 66)) {
+          auto str = _internal_mutable_filter_input_type();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "gluten.shard.proto.LookupRequest.filter_input_type"));
         } else
           goto handle_unusual;
         continue;
@@ -421,6 +546,42 @@ uint8_t* LookupRequest::_InternalSerialize(
     }
   }
 
+  // bytes probe_filter_columns_compact = 5;
+  if (!this->_internal_probe_filter_columns_compact().empty()) {
+    target = stream->WriteBytesMaybeAliased(
+        5, this->_internal_probe_filter_columns_compact(), target);
+  }
+
+  // string filter_expression = 6;
+  if (!this->_internal_filter_expression().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_filter_expression().data(), static_cast<int>(this->_internal_filter_expression().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "gluten.shard.proto.LookupRequest.filter_expression");
+    target = stream->WriteStringMaybeAliased(
+        6, this->_internal_filter_expression(), target);
+  }
+
+  // string probe_columns_type = 7;
+  if (!this->_internal_probe_columns_type().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_probe_columns_type().data(), static_cast<int>(this->_internal_probe_columns_type().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "gluten.shard.proto.LookupRequest.probe_columns_type");
+    target = stream->WriteStringMaybeAliased(
+        7, this->_internal_probe_columns_type(), target);
+  }
+
+  // string filter_input_type = 8;
+  if (!this->_internal_filter_input_type().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_filter_input_type().data(), static_cast<int>(this->_internal_filter_input_type().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "gluten.shard.proto.LookupRequest.filter_input_type");
+    target = stream->WriteStringMaybeAliased(
+        8, this->_internal_filter_input_type(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -458,6 +619,34 @@ size_t LookupRequest::ByteSizeLong() const {
         this->_internal_probe_keys_compact());
   }
 
+  // bytes probe_filter_columns_compact = 5;
+  if (!this->_internal_probe_filter_columns_compact().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::BytesSize(
+        this->_internal_probe_filter_columns_compact());
+  }
+
+  // string filter_expression = 6;
+  if (!this->_internal_filter_expression().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_filter_expression());
+  }
+
+  // string probe_columns_type = 7;
+  if (!this->_internal_probe_columns_type().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_probe_columns_type());
+  }
+
+  // string filter_input_type = 8;
+  if (!this->_internal_filter_input_type().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_filter_input_type());
+  }
+
   // int64 set_id = 1;
   if (this->_internal_set_id() != 0) {
     total_size += ::_pbi::WireFormatLite::Int64SizePlusOne(this->_internal_set_id());
@@ -490,6 +679,18 @@ void LookupRequest::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::
   if (!from._internal_probe_keys_compact().empty()) {
     _this->_internal_set_probe_keys_compact(from._internal_probe_keys_compact());
   }
+  if (!from._internal_probe_filter_columns_compact().empty()) {
+    _this->_internal_set_probe_filter_columns_compact(from._internal_probe_filter_columns_compact());
+  }
+  if (!from._internal_filter_expression().empty()) {
+    _this->_internal_set_filter_expression(from._internal_filter_expression());
+  }
+  if (!from._internal_probe_columns_type().empty()) {
+    _this->_internal_set_probe_columns_type(from._internal_probe_columns_type());
+  }
+  if (!from._internal_filter_input_type().empty()) {
+    _this->_internal_set_filter_input_type(from._internal_filter_input_type());
+  }
   if (from._internal_set_id() != 0) {
     _this->_internal_set_set_id(from._internal_set_id());
   }
@@ -519,6 +720,22 @@ void LookupRequest::InternalSwap(LookupRequest* other) {
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
       &_impl_.probe_keys_compact_, lhs_arena,
       &other->_impl_.probe_keys_compact_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.probe_filter_columns_compact_, lhs_arena,
+      &other->_impl_.probe_filter_columns_compact_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.filter_expression_, lhs_arena,
+      &other->_impl_.filter_expression_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.probe_columns_type_, lhs_arena,
+      &other->_impl_.probe_columns_type_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.filter_input_type_, lhs_arena,
+      &other->_impl_.filter_input_type_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
       PROTOBUF_FIELD_OFFSET(LookupRequest, _impl_.shard_id_)
@@ -793,6 +1010,10 @@ ShardLookupEntry::ShardLookupEntry(const ShardLookupEntry& from)
       decltype(_impl_.input_indices_){from._impl_.input_indices_}
     , /*decltype(_impl_._input_indices_cached_byte_size_)*/{0}
     , decltype(_impl_.probe_keys_compact_){}
+    , decltype(_impl_.probe_filter_columns_compact_){}
+    , decltype(_impl_.filter_expression_){}
+    , decltype(_impl_.probe_columns_type_){}
+    , decltype(_impl_.filter_input_type_){}
     , decltype(_impl_.shard_id_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
@@ -803,6 +1024,38 @@ ShardLookupEntry::ShardLookupEntry(const ShardLookupEntry& from)
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   if (!from._internal_probe_keys_compact().empty()) {
     _this->_impl_.probe_keys_compact_.Set(from._internal_probe_keys_compact(), 
+      _this->GetArenaForAllocation());
+  }
+  _impl_.probe_filter_columns_compact_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.probe_filter_columns_compact_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_probe_filter_columns_compact().empty()) {
+    _this->_impl_.probe_filter_columns_compact_.Set(from._internal_probe_filter_columns_compact(), 
+      _this->GetArenaForAllocation());
+  }
+  _impl_.filter_expression_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.filter_expression_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_filter_expression().empty()) {
+    _this->_impl_.filter_expression_.Set(from._internal_filter_expression(), 
+      _this->GetArenaForAllocation());
+  }
+  _impl_.probe_columns_type_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.probe_columns_type_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_probe_columns_type().empty()) {
+    _this->_impl_.probe_columns_type_.Set(from._internal_probe_columns_type(), 
+      _this->GetArenaForAllocation());
+  }
+  _impl_.filter_input_type_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.filter_input_type_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_filter_input_type().empty()) {
+    _this->_impl_.filter_input_type_.Set(from._internal_filter_input_type(), 
       _this->GetArenaForAllocation());
   }
   _this->_impl_.shard_id_ = from._impl_.shard_id_;
@@ -817,12 +1070,32 @@ inline void ShardLookupEntry::SharedCtor(
       decltype(_impl_.input_indices_){arena}
     , /*decltype(_impl_._input_indices_cached_byte_size_)*/{0}
     , decltype(_impl_.probe_keys_compact_){}
+    , decltype(_impl_.probe_filter_columns_compact_){}
+    , decltype(_impl_.filter_expression_){}
+    , decltype(_impl_.probe_columns_type_){}
+    , decltype(_impl_.filter_input_type_){}
     , decltype(_impl_.shard_id_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.probe_keys_compact_.InitDefault();
   #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
     _impl_.probe_keys_compact_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.probe_filter_columns_compact_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.probe_filter_columns_compact_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.filter_expression_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.filter_expression_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.probe_columns_type_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.probe_columns_type_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.filter_input_type_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.filter_input_type_.Set("", GetArenaForAllocation());
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
 }
 
@@ -839,6 +1112,10 @@ inline void ShardLookupEntry::SharedDtor() {
   GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
   _impl_.input_indices_.~RepeatedField();
   _impl_.probe_keys_compact_.Destroy();
+  _impl_.probe_filter_columns_compact_.Destroy();
+  _impl_.filter_expression_.Destroy();
+  _impl_.probe_columns_type_.Destroy();
+  _impl_.filter_input_type_.Destroy();
 }
 
 void ShardLookupEntry::SetCachedSize(int size) const {
@@ -853,6 +1130,10 @@ void ShardLookupEntry::Clear() {
 
   _impl_.input_indices_.Clear();
   _impl_.probe_keys_compact_.ClearToEmpty();
+  _impl_.probe_filter_columns_compact_.ClearToEmpty();
+  _impl_.filter_expression_.ClearToEmpty();
+  _impl_.probe_columns_type_.ClearToEmpty();
+  _impl_.filter_input_type_.ClearToEmpty();
   _impl_.shard_id_ = 0;
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
@@ -888,6 +1169,45 @@ const char* ShardLookupEntry::_InternalParse(const char* ptr, ::_pbi::ParseConte
         } else if (static_cast<uint8_t>(tag) == 24) {
           _internal_add_input_indices(::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr));
           CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // bytes probe_filter_columns_compact = 4;
+      case 4:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 34)) {
+          auto str = _internal_mutable_probe_filter_columns_compact();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // string filter_expression = 5;
+      case 5:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 42)) {
+          auto str = _internal_mutable_filter_expression();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "gluten.shard.proto.ShardLookupEntry.filter_expression"));
+        } else
+          goto handle_unusual;
+        continue;
+      // string probe_columns_type = 6;
+      case 6:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 50)) {
+          auto str = _internal_mutable_probe_columns_type();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "gluten.shard.proto.ShardLookupEntry.probe_columns_type"));
+        } else
+          goto handle_unusual;
+        continue;
+      // string filter_input_type = 7;
+      case 7:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 58)) {
+          auto str = _internal_mutable_filter_input_type();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "gluten.shard.proto.ShardLookupEntry.filter_input_type"));
         } else
           goto handle_unusual;
         continue;
@@ -941,6 +1261,42 @@ uint8_t* ShardLookupEntry::_InternalSerialize(
     }
   }
 
+  // bytes probe_filter_columns_compact = 4;
+  if (!this->_internal_probe_filter_columns_compact().empty()) {
+    target = stream->WriteBytesMaybeAliased(
+        4, this->_internal_probe_filter_columns_compact(), target);
+  }
+
+  // string filter_expression = 5;
+  if (!this->_internal_filter_expression().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_filter_expression().data(), static_cast<int>(this->_internal_filter_expression().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "gluten.shard.proto.ShardLookupEntry.filter_expression");
+    target = stream->WriteStringMaybeAliased(
+        5, this->_internal_filter_expression(), target);
+  }
+
+  // string probe_columns_type = 6;
+  if (!this->_internal_probe_columns_type().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_probe_columns_type().data(), static_cast<int>(this->_internal_probe_columns_type().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "gluten.shard.proto.ShardLookupEntry.probe_columns_type");
+    target = stream->WriteStringMaybeAliased(
+        6, this->_internal_probe_columns_type(), target);
+  }
+
+  // string filter_input_type = 7;
+  if (!this->_internal_filter_input_type().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_filter_input_type().data(), static_cast<int>(this->_internal_filter_input_type().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "gluten.shard.proto.ShardLookupEntry.filter_input_type");
+    target = stream->WriteStringMaybeAliased(
+        7, this->_internal_filter_input_type(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -978,6 +1334,34 @@ size_t ShardLookupEntry::ByteSizeLong() const {
         this->_internal_probe_keys_compact());
   }
 
+  // bytes probe_filter_columns_compact = 4;
+  if (!this->_internal_probe_filter_columns_compact().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::BytesSize(
+        this->_internal_probe_filter_columns_compact());
+  }
+
+  // string filter_expression = 5;
+  if (!this->_internal_filter_expression().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_filter_expression());
+  }
+
+  // string probe_columns_type = 6;
+  if (!this->_internal_probe_columns_type().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_probe_columns_type());
+  }
+
+  // string filter_input_type = 7;
+  if (!this->_internal_filter_input_type().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_filter_input_type());
+  }
+
   // int32 shard_id = 1;
   if (this->_internal_shard_id() != 0) {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_shard_id());
@@ -1005,6 +1389,18 @@ void ShardLookupEntry::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const
   if (!from._internal_probe_keys_compact().empty()) {
     _this->_internal_set_probe_keys_compact(from._internal_probe_keys_compact());
   }
+  if (!from._internal_probe_filter_columns_compact().empty()) {
+    _this->_internal_set_probe_filter_columns_compact(from._internal_probe_filter_columns_compact());
+  }
+  if (!from._internal_filter_expression().empty()) {
+    _this->_internal_set_filter_expression(from._internal_filter_expression());
+  }
+  if (!from._internal_probe_columns_type().empty()) {
+    _this->_internal_set_probe_columns_type(from._internal_probe_columns_type());
+  }
+  if (!from._internal_filter_input_type().empty()) {
+    _this->_internal_set_filter_input_type(from._internal_filter_input_type());
+  }
   if (from._internal_shard_id() != 0) {
     _this->_internal_set_shard_id(from._internal_shard_id());
   }
@@ -1031,6 +1427,22 @@ void ShardLookupEntry::InternalSwap(ShardLookupEntry* other) {
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
       &_impl_.probe_keys_compact_, lhs_arena,
       &other->_impl_.probe_keys_compact_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.probe_filter_columns_compact_, lhs_arena,
+      &other->_impl_.probe_filter_columns_compact_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.filter_expression_, lhs_arena,
+      &other->_impl_.filter_expression_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.probe_columns_type_, lhs_arena,
+      &other->_impl_.probe_columns_type_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.filter_input_type_, lhs_arena,
+      &other->_impl_.filter_input_type_, rhs_arena
   );
   swap(_impl_.shard_id_, other->_impl_.shard_id_);
 }

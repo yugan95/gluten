@@ -19,13 +19,16 @@
 
 #include <sstream>
 
+#include <folly/json.h>
 #include <folly/io/IOBuf.h>
 
 #include "compute/VeloxBackend.h"
 #include "shard/BlockManagerBridge.h"
-#include "velox/common/base/BloomFilter.h"
+#include "shard/BloomFilter64.h"
 #include "velox/common/memory/StreamArena.h"
+#include "velox/core/Expressions.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/fbhive/HiveTypeSerializer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -414,7 +417,7 @@ TEST_F(VeloxShardManagerTest, FetchBloomFilterReturnsStoredData) {
   int32_t shardId = -1; // set-level merged BF
 
   // Create a real BloomFilter serialized to bytes.
-  BloomFilter<> bf;
+  BloomFilter64 bf;
   bf.reset(100);
   bf.insert(42);
   bf.insert(123);
@@ -435,7 +438,7 @@ TEST_F(VeloxShardManagerTest, FetchBloomFilterReturnsStoredData) {
   ASSERT_EQ(fetched.size(), bfBytes.size());
 
   // Deserialize and verify the BF contents.
-  BloomFilter<> restored;
+  BloomFilter64 restored;
   restored.merge(fetched.data());
   EXPECT_TRUE(restored.isSet());
   EXPECT_TRUE(restored.mayContain(42));
@@ -457,7 +460,7 @@ TEST_F(VeloxShardManagerTest, FetchBloomFilterPerShard) {
   int64_t setId = 201;
   int32_t shardId = 2;
 
-  BloomFilter<> bf;
+  BloomFilter64 bf;
   bf.reset(50);
   bf.insert(10);
   bf.insert(20);
@@ -473,11 +476,194 @@ TEST_F(VeloxShardManagerTest, FetchBloomFilterPerShard) {
 
   ASSERT_FALSE(fetched.empty());
 
-  BloomFilter<> restored;
+  BloomFilter64 restored;
   restored.merge(fetched.data());
   EXPECT_TRUE(restored.mayContain(10));
   EXPECT_TRUE(restored.mayContain(20));
   EXPECT_FALSE(restored.mayContain(30));
+}
+
+// ---------------------------------------------------------------------------
+// Server-side filter pushdown tests
+// ---------------------------------------------------------------------------
+
+// Helper: build a filter expression JSON and filterInputType for server-side
+// filter eval.  The filter is "probeCol < buildCol" where probeCol and buildCol
+// are referenced by name.
+static std::pair<std::string, RowTypePtr> makeFilterLessThan(
+    const std::string& probeColName,
+    const TypePtr& probeColType,
+    const std::string& buildColName,
+    const TypePtr& buildColType,
+    const RowTypePtr& buildOutputType) {
+  Type::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+
+  auto probeField = std::make_shared<core::FieldAccessTypedExpr>(
+      probeColType, probeColName);
+  auto buildField = std::make_shared<core::FieldAccessTypedExpr>(
+      buildColType, buildColName);
+  auto filterExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{probeField, buildField},
+      "lessthan");
+
+  auto filterExprJson = folly::toJson(filterExpr->serialize());
+
+  // filterInputType = concat(probeFilterColumns, buildOutputType)
+  std::vector<std::string> names = {probeColName};
+  std::vector<TypePtr> types = {probeColType};
+  for (uint32_t i = 0; i < buildOutputType->size(); ++i) {
+    names.push_back(buildOutputType->nameOf(i));
+    types.push_back(buildOutputType->childAt(i));
+  }
+  auto filterInputType = ROW(std::move(names), std::move(types));
+  return {filterExprJson, filterInputType};
+}
+
+// lookup() with server-side filter: only rows passing filter are returned.
+TEST_F(VeloxShardManagerTest, LookupWithFilter) {
+  int64_t setId = 500;
+  int32_t shardId = 0;
+
+  // Build: k=int32 (key), v=int64 (value)
+  // Rows: (1,15), (2,10), (3,35), (4,50)
+  auto buildData = makeRowVector(
+      {"k", "v"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4}),
+       makeFlatVector<int64_t>({15L, 10L, 35L, 50L})});
+  populateShard(setId, shardId, buildData, 1);
+  VeloxShardManager::getInstance()->constructShardTable(setId, shardId);
+
+  // Probe keys: {1, 2, 3, 4} — all match
+  auto probeKeys = makeRowVector({makeFlatVector<int32_t>({1, 2, 3, 4})});
+  std::vector<int32_t> inputIndices = {0, 1, 2, 3};
+
+  // Probe filter columns: pval = {10, 20, 30, 40}
+  auto probeFilterCols = makeRowVector(
+      {"pval"}, {makeFlatVector<int64_t>({10L, 20L, 30L, 40L})});
+
+  // Filter: pval < v (probe.pval < build.v)
+  auto buildOutputType = asRowType(buildData->type());
+  auto [filterExprJson, filterInputType] =
+      makeFilterLessThan("pval", BIGINT(), "v", BIGINT(), buildOutputType);
+
+  auto result = VeloxShardManager::getInstance()->lookup(
+      setId, shardId, probeKeys, inputIndices, leafPool_.get(),
+      probeFilterCols, filterExprJson, nullptr, filterInputType);
+
+  // Expected passing rows:
+  //   k=1: pval=10 < v=15 → pass
+  //   k=2: pval=20 < v=10 → fail
+  //   k=3: pval=30 < v=35 → pass
+  //   k=4: pval=40 < v=50 → pass
+  ASSERT_NE(result.output, nullptr);
+  ASSERT_EQ(result.output->size(), 3);
+  ASSERT_EQ(result.inputHits.size(), 3);
+
+  // Verify only passing rows are returned.
+  std::set<int32_t> passedKeys;
+  auto* keyCol = result.output->childAt(0)->as<SimpleVector<int32_t>>();
+  for (vector_size_t i = 0; i < result.output->size(); ++i) {
+    passedKeys.insert(keyCol->valueAt(i));
+  }
+  EXPECT_TRUE(passedKeys.count(1));
+  EXPECT_FALSE(passedKeys.count(2));
+  EXPECT_TRUE(passedKeys.count(3));
+  EXPECT_TRUE(passedKeys.count(4));
+}
+
+// lookup() without filter params — backward compatibility.
+TEST_F(VeloxShardManagerTest, LookupWithoutFilterBackcompat) {
+  int64_t setId = 501;
+  int32_t shardId = 0;
+
+  auto buildData = makeRowVector(
+      {"k", "v"},
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({100L, 200L, 300L})});
+  populateShard(setId, shardId, buildData, 1);
+  VeloxShardManager::getInstance()->constructShardTable(setId, shardId);
+
+  auto probeKeys = makeRowVector({makeFlatVector<int32_t>({1, 3})});
+  std::vector<int32_t> inputIndices = {0, 1};
+
+  // No filter params — should work as before.
+  auto result = VeloxShardManager::getInstance()->lookup(
+      setId, shardId, probeKeys, inputIndices);
+
+  ASSERT_NE(result.output, nullptr);
+  ASSERT_EQ(result.output->size(), 2);
+}
+
+// lookupAndSerialize() with server-side filter.
+TEST_F(VeloxShardManagerTest, LookupAndSerializeWithFilter) {
+  int64_t setId = 502;
+  int32_t shardId = 0;
+
+  auto buildData = makeRowVector(
+      {"k", "v"},
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({15L, 5L, 35L})});
+  populateShard(setId, shardId, buildData, 1);
+  VeloxShardManager::getInstance()->constructShardTable(setId, shardId);
+
+  auto probeKeys = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  std::vector<int32_t> inputIndices = {0, 1, 2};
+
+  auto probeFilterCols = makeRowVector(
+      {"pval"}, {makeFlatVector<int64_t>({10L, 10L, 30L})});
+
+  auto buildOutputType = asRowType(buildData->type());
+  auto [filterExprJson, filterInputType] =
+      makeFilterLessThan("pval", BIGINT(), "v", BIGINT(), buildOutputType);
+
+  auto result = VeloxShardManager::getInstance()->lookupAndSerialize(
+      setId, shardId, probeKeys, inputIndices, leafPool_.get(),
+      probeFilterCols, filterExprJson, nullptr, filterInputType);
+
+  // k=1: 10 < 15 → pass
+  // k=2: 10 < 5  → fail
+  // k=3: 30 < 35 → pass
+  ASSERT_EQ(result.inputHits.size(), 2);
+  ASSERT_FALSE(result.outputBytes.empty());
+
+  std::set<int32_t> passedIndices(
+      result.inputHits.begin(), result.inputHits.end());
+  EXPECT_TRUE(passedIndices.count(0));   // k=1
+  EXPECT_FALSE(passedIndices.count(1));  // k=2 filtered
+  EXPECT_TRUE(passedIndices.count(2));   // k=3
+}
+
+// Filter that filters all rows — empty result.
+TEST_F(VeloxShardManagerTest, LookupWithFilterAllFiltered) {
+  int64_t setId = 503;
+  int32_t shardId = 0;
+
+  auto buildData = makeRowVector(
+      {"k", "v"},
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<int64_t>({5L, 3L})});
+  populateShard(setId, shardId, buildData, 1);
+  VeloxShardManager::getInstance()->constructShardTable(setId, shardId);
+
+  auto probeKeys = makeRowVector({makeFlatVector<int32_t>({1, 2})});
+  std::vector<int32_t> inputIndices = {0, 1};
+
+  // pval={100, 200} — all > v, so pval < v never holds.
+  auto probeFilterCols = makeRowVector(
+      {"pval"}, {makeFlatVector<int64_t>({100L, 200L})});
+
+  auto buildOutputType = asRowType(buildData->type());
+  auto [filterExprJson, filterInputType] =
+      makeFilterLessThan("pval", BIGINT(), "v", BIGINT(), buildOutputType);
+
+  auto result = VeloxShardManager::getInstance()->lookup(
+      setId, shardId, probeKeys, inputIndices, leafPool_.get(),
+      probeFilterCols, filterExprJson, nullptr, filterInputType);
+
+  EXPECT_EQ(result.output, nullptr);
+  EXPECT_TRUE(result.inputHits.empty());
 }
 
 // VARCHAR key tests are wrapped in NDEBUG because of an ODR (One Definition

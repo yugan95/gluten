@@ -144,17 +144,16 @@ case class ColumnarShardExchangeExec(
 
           val numKeyColumns = buildBoundKeys.length
           val blockSize = 4 << 20 // 4MB
+          // register in SQLConf as a typed config entry
+          val bloomCapacity = conf.getConfString(
+            "spark.sql.execution.distributedMapJoin.bloomFilterCapacity",
+            (5L << 20).toString).toLong
           val shardIds = sharded
             .mapPartitionsWithIndex {
               (shardId, batchIter) =>
                 val bm = SparkEnv.get.blockManager
                 val backendName = BackendsApiManager.getBackendName
 
-                // Scale BF capacity by numShards so that the merged BF (bitwise OR
-                // of all per-shard BFs) maintains the target FPR.  Each shard's BF
-                // is built with this capacity; after merge the combined BF has the
-                // same bit-array size, keeping load factor ≈ single-shard level.
-                val bloomCapacity = (5L << 20) * numShards
                 val builderHandle = GlutenShardManagerJni.createShardBuilder(
                   numKeyColumns,
                   blockSize,

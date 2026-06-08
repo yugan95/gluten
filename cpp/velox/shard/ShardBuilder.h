@@ -8,7 +8,7 @@
 
 #include <sstream>
 
-#include "velox/common/base/BloomFilter.h"
+#include "BloomFilter64.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -170,7 +170,7 @@ class ShardBuilder {
   int32_t blockSize_;
   std::shared_ptr<memory::MemoryPool> pool_;
 
-  BloomFilter<> bloomFilter_;
+  BloomFilter64 bloomFilter_;
   std::string buffer_;
   std::vector<uint32_t> checksums_;
   int32_t pieceCount_{0};

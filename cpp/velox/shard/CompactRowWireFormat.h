@@ -178,61 +178,6 @@ inline std::string serializeCompactRowBatch(
 }
 
 // ---------------------------------------------------------------------------
-// Assemble a CompactRow wire payload from per-row byte slices that were
-// already produced by an external serializer (typically the dedup pass on
-// the probe side, where each candidate row is serialized once for both
-// hash-collision tie-break and final wire encoding).
-//
-// This avoids the second CompactRow::serialize pass that
-// serializeCompactRowBatch would perform: callers that have already paid
-// the per-row serialize cost can hand the bytes straight in.
-//
-// Each entry in `rowBytes` becomes one row in the wire payload, in input
-// order.  An empty `rowBytes` produces a header-only payload (12 bytes).
-// The row contents are NOT validated — callers are responsible for ensuring
-// each slice is a complete CompactRow body for a consistent RowType (the
-// decoder will fail loudly if not).
-// ---------------------------------------------------------------------------
-inline std::string assembleCompactRowWireFromBytes(
-    const std::vector<std::string_view>& rowBytes) {
-  const auto numRows = static_cast<uint32_t>(rowBytes.size());
-
-  // Compute total size: header + sum(perRowPrefix + rowLen).
-  size_t bodyBytes = 0;
-  for (const auto& row : rowBytes) {
-    bodyBytes += kCompactRowWireRowPrefixSize + row.size();
-  }
-
-  std::string out(kCompactRowWireHeaderSize + bodyBytes, '\0');
-  char* base = out.data();
-
-  // Header.
-  detail::writeUint32LE(base, kCompactRowWireMagic);
-  detail::writeUint32LE(base + 4, kCompactRowWireVersion);
-  detail::writeUint32LE(base + 8, numRows);
-
-  // Body: per-row length prefix + row bytes (memcpy from caller-owned data).
-  size_t cursor = kCompactRowWireHeaderSize;
-  for (uint32_t i = 0; i < numRows; ++i) {
-    const auto rowLen = static_cast<uint32_t>(rowBytes[i].size());
-    detail::writeUint32LE(base + cursor, rowLen);
-    cursor += kCompactRowWireRowPrefixSize;
-    if (rowLen > 0) {
-      std::memcpy(base + cursor, rowBytes[i].data(), rowLen);
-    }
-    cursor += rowLen;
-  }
-  VELOX_CHECK_EQ(
-      cursor,
-      out.size(),
-      "CompactRow wire payload size mismatch in assembleCompactRowWireFromBytes: "
-      "cursor={}, expected={}",
-      cursor,
-      out.size());
-  return out;
-}
-
-// ---------------------------------------------------------------------------
 // Deserialize a CompactRow wire-format payload back into a RowVector.
 //
 // `rowType` must match the schema that was used on the encoder side.  Magic

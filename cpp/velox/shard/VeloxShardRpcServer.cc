@@ -4,6 +4,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/type/Type.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 
 #include "CompactRowWireFormat.h"
 
@@ -141,8 +142,32 @@ void ShardLookupCallbackServiceImpl::doLookup(
     std::vector<int32_t> inputIndices(
         request->input_indices().begin(), request->input_indices().end());
 
+    // Parse server-side filter pushdown fields.
+    RowVectorPtr probeFilterColumns;
+    std::string filterExprJson;
+    RowTypePtr probeColumnsType;
+    RowTypePtr filterInputType;
+
+    if (!request->filter_expression().empty()) {
+      filterExprJson = request->filter_expression();
+      type::fbhive::HiveTypeParser parser;
+      probeColumnsType = std::dynamic_pointer_cast<const RowType>(
+          parser.parse(request->probe_columns_type()));
+      filterInputType = std::dynamic_pointer_cast<const RowType>(
+          parser.parse(request->filter_input_type()));
+      if (!request->probe_filter_columns_compact().empty() &&
+          probeColumnsType) {
+        const auto& filterBytes = request->probe_filter_columns_compact();
+        probeFilterColumns = deserializeCompactRowBatch(
+            std::string_view(filterBytes.data(), filterBytes.size()),
+            probeColumnsType,
+            rpcPool_);
+      }
+    }
+
     auto result = shardManager->lookupAndSerialize(
-        setId, shardId, probeKeys, inputIndices, rpcPool_);
+        setId, shardId, probeKeys, inputIndices, rpcPool_,
+        probeFilterColumns, filterExprJson, probeColumnsType, filterInputType);
 
     if (!result.outputBytes.empty()) {
       response->set_output_compact(std::move(result.outputBytes));
@@ -195,8 +220,33 @@ void ShardLookupCallbackServiceImpl::doBatchLookup(
       std::vector<int32_t> inputIndices(
           entry.input_indices().begin(), entry.input_indices().end());
 
+      // Parse server-side filter pushdown fields.
+      RowVectorPtr probeFilterColumns;
+      std::string filterExprJson;
+      RowTypePtr probeColumnsType;
+      RowTypePtr filterInputType;
+
+      if (!entry.filter_expression().empty()) {
+        filterExprJson = entry.filter_expression();
+        type::fbhive::HiveTypeParser parser;
+        probeColumnsType = std::dynamic_pointer_cast<const RowType>(
+            parser.parse(entry.probe_columns_type()));
+        filterInputType = std::dynamic_pointer_cast<const RowType>(
+            parser.parse(entry.filter_input_type()));
+        if (!entry.probe_filter_columns_compact().empty() &&
+            probeColumnsType) {
+          const auto& filterBytes = entry.probe_filter_columns_compact();
+          probeFilterColumns = deserializeCompactRowBatch(
+              std::string_view(filterBytes.data(), filterBytes.size()),
+              probeColumnsType,
+              rpcPool_);
+        }
+      }
+
       auto result = shardManager->lookupAndSerialize(
-          setId, shardId, probeKeys, inputIndices, rpcPool_);
+          setId, shardId, probeKeys, inputIndices, rpcPool_,
+          probeFilterColumns, filterExprJson, probeColumnsType,
+          filterInputType);
 
       if (!result.outputBytes.empty()) {
         auto* resultEntry = response->add_results();

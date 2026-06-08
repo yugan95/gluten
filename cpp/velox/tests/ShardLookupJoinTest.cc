@@ -1478,3 +1478,136 @@ TEST_F(ShardLookupJoinTest, InnerJoinNullFilterPassthrough) {
   auto results = AssertQueryBuilder(plan).copyResults(pool_.get());
   ASSERT_EQ(results->size(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Left Join with server-side filter: unmatched + filter-rejected rows
+// get null-filled build columns.
+//
+// Probe: pk={1,2,3,5}, pval={10,20,30,99}
+// Build: k={1,2,3,4}, v={15,10,35,50}
+// Equi-join on pk=k, then filter: pval < v
+// Expected:
+//   pk=1: pval=10 < v=15 → pass → (1,10,1,15)
+//   pk=2: pval=20 < v=10 → fail → LEFT null-fill → (2,20,null,null)
+//   pk=3: pval=30 < v=35 → pass → (3,30,3,35)
+//   pk=5: no match        → LEFT null-fill → (5,99,null,null)
+// ---------------------------------------------------------------------------
+TEST_F(ShardLookupJoinTest, LeftJoinWithFilter) {
+  const int64_t setId = 300;
+  const int32_t numShards = 1;
+
+  auto buildData = makeRowVector(
+      {"k", "v"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4}),
+       makeFlatVector<int64_t>({15L, 10L, 35L, 50L})});
+  populateShard(setId, 0, buildData, 1);
+
+  auto probeData = makeRowVector(
+      {"pk", "pval"},
+      {makeFlatVector<int32_t>({1, 2, 3, 5}),
+       makeFlatVector<int64_t>({10L, 20L, 30L, 99L})});
+
+  auto pvalField = std::make_shared<core::FieldAccessTypedExpr>(
+      BIGINT(), "pval");
+  auto vField = std::make_shared<core::FieldAccessTypedExpr>(
+      BIGINT(), "v");
+  auto filterExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{pvalField, vField},
+      "lessthan");
+
+  auto plan = makeJoinPlan(
+      {probeData},
+      core::JoinType::kLeft,
+      {"pk"},
+      {"k"},
+      asRowType(buildData->type()),
+      setId,
+      numShards,
+      1024, 4,
+      filterExpr);
+
+  auto results = AssertQueryBuilder(plan).copyResults(pool_.get());
+  // 4 output rows: 2 matched + 2 null-filled (pk=2 filtered, pk=5 unmatched)
+  ASSERT_EQ(results->size(), 4);
+
+  auto pkVec = results->childAt(0)->as<SimpleVector<int32_t>>();
+  auto vIdx = results->type()->as<TypeKind::ROW>().getChildIdx("v");
+  auto vVec = results->childAt(vIdx);
+
+  int nullCount = 0;
+  std::set<int32_t> matchedPks;
+  for (vector_size_t r = 0; r < results->size(); ++r) {
+    auto pk = pkVec->valueAt(r);
+    if (vVec->isNullAt(r)) {
+      nullCount++;
+      EXPECT_TRUE(pk == 2 || pk == 5)
+          << "pk=" << pk << " should be null-filled";
+    } else {
+      matchedPks.insert(pk);
+    }
+  }
+  EXPECT_EQ(nullCount, 2);
+  EXPECT_TRUE(matchedPks.count(1));
+  EXPECT_TRUE(matchedPks.count(3));
+}
+
+// ---------------------------------------------------------------------------
+// Inner Join with filter + duplicate probe keys.
+// Verifies that dedup key extension (concat probeKeys + filterProbeColumns)
+// correctly handles duplicate keys with different filter column values.
+//
+// Probe: pk={1,1,2,2}, pval={5,50,5,50}
+// Build: k={1,2}, v={10,10}
+// Filter: pval < v
+// Expected:
+//   (pk=1, pval=5): 5 < 10 → pass
+//   (pk=1, pval=50): 50 < 10 → fail
+//   (pk=2, pval=5): 5 < 10 → pass
+//   (pk=2, pval=50): 50 < 10 → fail
+// Result: 2 rows.
+// ---------------------------------------------------------------------------
+TEST_F(ShardLookupJoinTest, InnerJoinFilterWithDuplicateKeys) {
+  const int64_t setId = 301;
+  const int32_t numShards = 1;
+
+  auto buildData = makeRowVector(
+      {"k", "v"},
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<int64_t>({10L, 10L})});
+  populateShard(setId, 0, buildData, 1);
+
+  auto probeData = makeRowVector(
+      {"pk", "pval"},
+      {makeFlatVector<int32_t>({1, 1, 2, 2}),
+       makeFlatVector<int64_t>({5L, 50L, 5L, 50L})});
+
+  auto pvalField = std::make_shared<core::FieldAccessTypedExpr>(
+      BIGINT(), "pval");
+  auto vField = std::make_shared<core::FieldAccessTypedExpr>(
+      BIGINT(), "v");
+  auto filterExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{pvalField, vField},
+      "lessthan");
+
+  auto plan = makeJoinPlan(
+      {probeData},
+      core::JoinType::kInner,
+      {"pk"},
+      {"k"},
+      asRowType(buildData->type()),
+      setId,
+      numShards,
+      1024, 4,
+      filterExpr);
+
+  auto results = AssertQueryBuilder(plan).copyResults(pool_.get());
+  ASSERT_EQ(results->size(), 2);
+
+  auto pvalVec = results->childAt(1)->as<SimpleVector<int64_t>>();
+  for (vector_size_t r = 0; r < results->size(); ++r) {
+    EXPECT_EQ(pvalVec->valueAt(r), 5L)
+        << "only pval=5 should pass filter (5 < 10)";
+  }
+}

@@ -54,6 +54,32 @@ message LookupRequest {
   // Original row indices in the probe batch that correspond to each row in
   // probe_keys_compact.  Used to reconstruct the join output ordering.
   repeated int32 input_indices = 4;
+
+  // --- Server-side join condition eval (filter pushdown) ---
+  // TODO(perf): filter_expression / probe_columns_type / filter_input_type
+  // are identical across all RPCs for the same ShardLookupJoin operator.
+  // A future optimization is to distribute them once during the
+  // ColumnarShardExchange build phase and have the server pre-compile,
+  // eliminating per-RPC overhead.
+
+  // Probe columns referenced by the join condition, serialized in CompactRow
+  // wire format.  Only columns actually used by the filter expression are
+  // included (not the full probe row) to minimize payload.
+  bytes probe_filter_columns_compact = 5;
+
+  // Join condition (non-equi part) serialized as Velox ITypedExpr JSON
+  // (ISerializable::serialize → folly::toJson).
+  string filter_expression = 6;
+
+  // RowType of probe_filter_columns_compact in Hive format
+  // (e.g. "struct<pid:string>").  Needed by the server to deserialize
+  // the probe filter columns.
+  string probe_columns_type = 7;
+
+  // Full input schema for filter evaluation in Hive format:
+  // concat(probe filter columns type, build output type).
+  // Needed by the server to compile the ExprSet.
+  string filter_input_type = 8;
 }
 
 // Lookup response from the build-side executor.
@@ -81,6 +107,12 @@ message ShardLookupEntry {
   int32 shard_id = 1;
   bytes probe_keys_compact = 2;
   repeated int32 input_indices = 3;
+
+  // Server-side join condition eval fields (same semantics as LookupRequest).
+  bytes probe_filter_columns_compact = 4;
+  string filter_expression = 5;
+  string probe_columns_type = 6;
+  string filter_input_type = 7;
 }
 
 // A single shard's lookup response within a batch.

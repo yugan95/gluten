@@ -27,7 +27,6 @@
 #include "ShardBuilder.h"
 #include "VeloxShardManager.h"
 #include "VeloxShardRpcServer.h"
-#include "SparkMurmurHash.h"
 #include "memory/VeloxColumnarBatch.h"
 #include "operators/serializer/VeloxColumnarBatchSerializer.h"
 #include "utils/ObjectStore.h"
@@ -318,7 +317,7 @@ Java_org_apache_spark_shard_GlutenShardManagerJni_00024_mergeBloomFilters(
       return env->NewByteArray(0);
     }
 
-    facebook::velox::BloomFilter<> merged;
+    gluten::shard::BloomFilter64 merged;
 
     for (jsize i = 0; i < count; ++i) {
       auto jBytes =
@@ -376,7 +375,7 @@ Java_org_apache_spark_shard_GlutenShardManagerJni_00024_createBloomFilterMerger(
     JNIEnv* env,
     jobject /*obj*/) {
   try {
-    auto* merger = new facebook::velox::BloomFilter<>();
+    auto* merger = new gluten::shard::BloomFilter64();
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(merger));
   } catch (const std::exception& ex) {
     rethrowAsJavaException(env, ex);
@@ -392,7 +391,7 @@ Java_org_apache_spark_shard_GlutenShardManagerJni_00024_mergeBloomFilterChunk(
     jlong mergerHandle,
     jbyteArray bloomFilter) {
   try {
-    auto* merger = handleToPtr<facebook::velox::BloomFilter<>>(mergerHandle);
+    auto* merger = handleToPtr<gluten::shard::BloomFilter64>(mergerHandle);
     if (bloomFilter == nullptr) {
       return;
     }
@@ -417,7 +416,7 @@ Java_org_apache_spark_shard_GlutenShardManagerJni_00024_finishBloomFilterMerger(
     jobject /*obj*/,
     jlong mergerHandle) {
   try {
-    auto* merger = handleToPtr<facebook::velox::BloomFilter<>>(mergerHandle);
+    auto* merger = handleToPtr<gluten::shard::BloomFilter64>(mergerHandle);
 
     jbyteArray result;
     if (!merger->isSet()) {

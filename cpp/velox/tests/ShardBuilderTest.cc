@@ -19,7 +19,7 @@
 
 #include "compute/VeloxBackend.h"
 #include "shard/BloomHashUtil.h"
-#include "velox/common/base/BloomFilter.h"
+#include "shard/BloomFilter64.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -167,7 +167,7 @@ TEST_F(ShardBuilderTest, BloomFilterContainsKeys) {
 
   // Deserialize the BloomFilter.
   ASSERT_FALSE(result.bloomBytes.empty());
-  BloomFilter<> bloomFilter;
+  BloomFilter64 bloomFilter;
   bloomFilter.merge(result.bloomBytes.data());
 
   // All inserted keys should be present (hash with seed=42, matching Spark).
@@ -242,7 +242,7 @@ TEST_F(ShardBuilderTest, MultiKeyBloomFilter) {
 
   // Deserialize the BloomFilter.
   ASSERT_FALSE(result.bloomBytes.empty());
-  BloomFilter<> bloomFilter;
+  BloomFilter64 bloomFilter;
   bloomFilter.merge(result.bloomBytes.data());
 
   // Verify composite key hash: hash = hashColumnAt(col1, hashColumnAt(col0, 42))
@@ -311,7 +311,7 @@ TEST_F(ShardBuilderTest, VarcharKeyBloomFilter) {
   auto result = builder.finish();
 
   ASSERT_FALSE(result.bloomBytes.empty());
-  BloomFilter<> bloomFilter;
+  BloomFilter64 bloomFilter;
   bloomFilter.merge(result.bloomBytes.data());
 
   // Verify each inserted varchar key is present in the BloomFilter.
@@ -362,7 +362,7 @@ TEST_F(ShardBuilderTest, MixedTypeMultiKeyBloomFilter) {
   auto result = builder.finish();
 
   ASSERT_FALSE(result.bloomBytes.empty());
-  BloomFilter<> bloomFilter;
+  BloomFilter64 bloomFilter;
   bloomFilter.merge(result.bloomBytes.data());
 
   // Verify composite key hash: hash = hashColumnAt(col1, hashColumnAt(col0, 42))

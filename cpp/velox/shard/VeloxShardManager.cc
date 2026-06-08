@@ -1,19 +1,25 @@
 #include "VeloxShardManager.h"
 
 #include <jni.h>
+#include <chrono>
+#include <cstdlib>
 #include <numeric>
 
+#include <folly/json.h>
 #include <folly/io/IOBuf.h>
 
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/StreamArena.h"
+#include "velox/core/Expressions.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/VectorHasher.h"
+#include "velox/expression/Expr.h"
 #include "velox/row/CompactRow.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/Type.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
+#include "velox/vector/DictionaryVector.h"
 
 #include "CompactRowWireFormat.h"
 
@@ -132,6 +138,14 @@ void VeloxShardManager::initialize(
     JavaVM* javaVm) {
   bool expected = false;
   if (initialized_.compare_exchange_strong(expected, true)) {
+    const char* dbgEnv = std::getenv("GLUTEN_SHARD_DMJ_DEBUG");
+    debugEnabled_ = (dbgEnv != nullptr && std::string(dbgEnv) == "1");
+
+    const char* ttlEnv = std::getenv("GLUTEN_SHARD_DEAD_ADDR_TTL_SECS");
+    if (ttlEnv) {
+      deadAddressTtl_ = std::chrono::seconds(std::atoi(ttlEnv));
+    }
+
     pool_ = memory::memoryManager()->addRootPool(
         "VeloxShardManager", memory::kMaxMemory);
     blockManagerBridge_ = std::move(bridge);
@@ -200,10 +214,23 @@ void VeloxShardManager::shutdown() {
     auto pools = setPools_.wlock();
     pools->clear();
   }
+  {
+    auto filters = bloomFilters_.wlock();
+    filters->clear();
+  }
+  // Clear filter cache before releasing pools (CachedFilter holds child pools).
+  {
+    std::lock_guard<std::mutex> lock(filterCacheMutex_);
+    filterCache_.clear();
+  }
   // Clear gRPC channel cache to release connections and references.
   {
     std::lock_guard<std::mutex> lock(channelsMutex_);
     grpcChannels_.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(deadAddressMutex_);
+    deadAddresses_.clear();
   }
   // Release cached JNI GlobalRefs before dropping javaVm_.
   if (javaVm_ && jniGlobalClass_) {
@@ -507,6 +534,14 @@ void VeloxShardManager::destroyShardTable(int64_t setId) {
     auto pools = setPools_.wlock();
     pools->erase(setId);
   }
+  {
+    auto filters = bloomFilters_.wlock();
+    filters->erase(setId);
+  }
+  {
+    std::lock_guard<std::mutex> lock(filterCacheMutex_);
+    filterCache_.erase(setId);
+  }
 }
 
 RowTypePtr VeloxShardManager::getKeyType(int64_t setId, int32_t shardId) {
@@ -547,6 +582,57 @@ std::string VeloxShardManager::fetchBloomFilter(
       reinterpret_cast<const char*>(buf->data()), buf->length());
 }
 
+std::shared_ptr<const BloomFilter64>
+VeloxShardManager::getOrLoadBloomFilter(int64_t setId) {
+  {
+    auto filters = bloomFilters_.rlock();
+    auto it = filters->find(setId);
+    if (it != filters->end()) {
+      return it->second;
+    }
+  }
+  auto filters = bloomFilters_.wlock();
+  auto it = filters->find(setId);
+  if (it != filters->end()) {
+    return it->second;
+  }
+  auto bfData = fetchBloomFilter(setId, -1);
+  if (bfData.empty()) {
+    return nullptr;
+  }
+  auto bf = std::make_shared<BloomFilter64>();
+  bf->merge(bfData.data());
+  auto constBf = std::const_pointer_cast<const BloomFilter64>(bf);
+  filters->emplace(setId, constBf);
+  return constBf;
+}
+
+// ---------------------------------------------------------------------------
+// Dead address blacklist
+// ---------------------------------------------------------------------------
+void VeloxShardManager::markAddressDead(const std::string& address) {
+  auto expiry = std::chrono::steady_clock::now() + deadAddressTtl_;
+  std::lock_guard<std::mutex> lock(deadAddressMutex_);
+  deadAddresses_[address] = expiry;
+  if (debugEnabled_) {
+    LOG(INFO) << "[ShardMgr-dbg] markAddressDead: " << address
+              << " ttl=" << deadAddressTtl_.count() << "s";
+  }
+}
+
+bool VeloxShardManager::isAddressDead(const std::string& address) {
+  std::lock_guard<std::mutex> lock(deadAddressMutex_);
+  auto it = deadAddresses_.find(address);
+  if (it == deadAddresses_.end()) {
+    return false;
+  }
+  if (std::chrono::steady_clock::now() >= it->second) {
+    deadAddresses_.erase(it);
+    return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // lookupAndSerialize – probe + batched extract + serialize
 //
@@ -563,7 +649,11 @@ VeloxShardManager::SerializedLookupResult VeloxShardManager::lookupAndSerialize(
     int32_t shardId,
     const RowVectorPtr& probeKeys,
     const std::vector<int32_t>& inputIndices,
-    memory::MemoryPool* rpcPool) {
+    memory::MemoryPool* rpcPool,
+    const RowVectorPtr& probeFilterColumns,
+    const std::string& filterExprJson,
+    const RowTypePtr& probeColumnsType,
+    const RowTypePtr& filterInputType) {
   SerializedLookupResult result;
 
   if (!probeKeys || probeKeys->size() == 0) {
@@ -660,6 +750,17 @@ VeloxShardManager::SerializedLookupResult VeloxShardManager::lookupAndSerialize(
     return result;
   }
 
+  // --- Server-side join condition eval ---
+  if (!filterExprJson.empty() && probeFilterColumns && filterInputType) {
+    auto cachedFilter = getOrCompileFilter(setId, filterExprJson, filterInputType);
+    evaluateFilter(
+        *cachedFilter, probeFilterColumns, hits, matchedRows,
+        rowContainer, rpcPool);
+    if (matchedRows.empty()) {
+      return result;
+    }
+  }
+
   // --- Batched extract + serialize ---
   const auto& colTypes = rowContainer->columnTypes();
   auto numColumns = colTypes.size();
@@ -675,7 +776,7 @@ VeloxShardManager::SerializedLookupResult VeloxShardManager::lookupAndSerialize(
       std::vector<TypePtr>(colTypes.begin(), colTypes.end()));
 
   auto totalMatches = static_cast<vector_size_t>(matchedRows.size());
-  constexpr vector_size_t kSerializeBatchSize = 512;
+  constexpr vector_size_t kSerializeBatchSize = 1024;
 
   // Serialize matched rows in batches.  Each batch is extracted from the
   // RowContainer, serialized to a complete CompactRow wire payload via
@@ -739,7 +840,11 @@ VeloxShardManager::LookupResult VeloxShardManager::lookup(
     int32_t shardId,
     const RowVectorPtr& probeKeys,
     const std::vector<int32_t>& inputIndices,
-    memory::MemoryPool* callerPool) {
+    memory::MemoryPool* callerPool,
+    const RowVectorPtr& probeFilterColumns,
+    const std::string& filterExprJson,
+    const RowTypePtr& probeColumnsType,
+    const RowTypePtr& filterInputType) {
   LookupResult result;
 
   if (!probeKeys || probeKeys->size() == 0) {
@@ -873,6 +978,17 @@ VeloxShardManager::LookupResult VeloxShardManager::lookup(
     return result;
   }
 
+  // --- Server-side join condition eval ---
+  if (!filterExprJson.empty() && probeFilterColumns && filterInputType) {
+    auto cachedFilter = getOrCompileFilter(setId, filterExprJson, filterInputType);
+    evaluateFilter(
+        *cachedFilter, probeFilterColumns, hits, matchedRows,
+        rowContainer, allocPool);
+    if (matchedRows.empty()) {
+      return result;
+    }
+  }
+
   // Extract matched rows from RowContainer into RowVector using extractColumn.
   auto numMatches = static_cast<vector_size_t>(matchedRows.size());
   const auto& colTypes = rowContainer->columnTypes();
@@ -906,6 +1022,145 @@ VeloxShardManager::LookupResult VeloxShardManager::lookup(
   result.outputPool = std::move(ownedPool);
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// getOrCompileFilter – compile and cache a filter ExprSet from JSON
+// ---------------------------------------------------------------------------
+std::shared_ptr<VeloxShardManager::CachedFilter>
+VeloxShardManager::getOrCompileFilter(
+    int64_t setId,
+    const std::string& filterExprJson,
+    const RowTypePtr& filterInputType) {
+  std::lock_guard<std::mutex> lock(filterCacheMutex_);
+  auto it = filterCache_.find(setId);
+  if (it != filterCache_.end()) {
+    return it->second;
+  }
+
+  if (debugEnabled_) {
+    LOG(INFO) << "[ShardMgr-dbg] compiling filter ExprSet"
+              << " inputType=" << filterInputType->toString()
+              << " exprJsonLen=" << filterExprJson.size();
+  }
+
+  Type::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+
+  auto json = folly::parseJson(filterExprJson);
+  static std::atomic<uint64_t> filterPoolCounter{0};
+  auto filterPool = pool_->addLeafChild(
+      fmt::format("filter_cache_{}", filterPoolCounter++));
+  auto queryCtx = core::QueryCtx::create();
+  auto execCtx = std::make_unique<core::ExecCtx>(
+      filterPool.get(), queryCtx.get());
+  auto expr = ISerializable::deserialize<core::ITypedExpr>(
+      json, filterPool.get());
+  auto exprSet = std::make_unique<exec::ExprSet>(
+      std::vector<core::TypedExprPtr>{expr}, execCtx.get());
+
+  auto cached = std::make_shared<CachedFilter>();
+  cached->pool = std::move(filterPool);
+  cached->queryCtx = std::move(queryCtx);
+  cached->execCtx = std::move(execCtx);
+  cached->exprSet = std::move(exprSet);
+  cached->inputType = filterInputType;
+
+  filterCache_[setId] = cached;
+  return cached;
+}
+
+// ---------------------------------------------------------------------------
+// evaluateFilter – eval join condition on (probe filter cols, build cols)
+//
+// For each matched row i:
+//   - probe columns are expanded from probeFilterColumns[inputHits[i]]
+//   - build columns are extracted from rowContainer at matchedRows[i]
+// The filter is evaluated on the assembled row, and only rows that pass
+// are retained in matchedRows and inputHits (compacted in-place).
+// ---------------------------------------------------------------------------
+void VeloxShardManager::evaluateFilter(
+    CachedFilter& filter,
+    const RowVectorPtr& probeFilterColumns,
+    std::vector<int32_t>& inputHits,
+    std::vector<char*>& matchedRows,
+    exec::RowContainer* rowContainer,
+    memory::MemoryPool* pool) {
+  auto numRows = static_cast<vector_size_t>(matchedRows.size());
+  if (numRows == 0) {
+    return;
+  }
+
+  auto filterStart = debugEnabled_
+      ? std::chrono::steady_clock::now()
+      : std::chrono::steady_clock::time_point{};
+
+  auto numProbeCols = probeFilterColumns->type()->size();
+  const auto& buildColTypes = rowContainer->columnTypes();
+  auto numBuildCols = buildColTypes.size();
+
+  // Build index buffer: for each matched row, the probe row index to use.
+  auto indexBuf = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
+  auto* indices = indexBuf->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    indices[i] = static_cast<vector_size_t>(inputHits[i]);
+  }
+
+  // Expand probe filter columns via DictionaryVector.
+  std::vector<VectorPtr> filterInputCols;
+  filterInputCols.reserve(numProbeCols + numBuildCols);
+  for (size_t col = 0; col < numProbeCols; ++col) {
+    filterInputCols.push_back(BaseVector::wrapInDictionary(
+        nullptr, indexBuf, numRows, probeFilterColumns->childAt(col)));
+  }
+
+  // Extract build columns from RowContainer.
+  for (size_t col = 0; col < numBuildCols; ++col) {
+    auto buildCol = BaseVector::create(buildColTypes[col], numRows, pool);
+    rowContainer->extractColumn(
+        matchedRows.data(), numRows, static_cast<int32_t>(col), buildCol);
+    filterInputCols.push_back(std::move(buildCol));
+  }
+
+  auto filterInput = std::make_shared<RowVector>(
+      pool, filter.inputType, nullptr, numRows, std::move(filterInputCols));
+
+  // Evaluate filter expression (serialized access per CachedFilter).
+  exec::EvalCtx evalCtx(filter.execCtx.get(), filter.exprSet.get(), filterInput.get());
+  auto activeRows = SelectivityVector(numRows);
+  std::vector<VectorPtr> filterResult(1);
+
+  {
+    std::lock_guard<std::mutex> evalLock(filter.evalMutex);
+    filter.exprSet->eval(activeRows, evalCtx, filterResult);
+  }
+
+  // Decode boolean result and compact matchedRows + inputHits.
+  DecodedVector decoded(*filterResult[0], activeRows);
+  vector_size_t passed = 0;
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    if (!decoded.isNullAt(i) && decoded.valueAt<bool>(i)) {
+      matchedRows[passed] = matchedRows[i];
+      inputHits[passed] = inputHits[i];
+      ++passed;
+    }
+  }
+  matchedRows.resize(passed);
+  inputHits.resize(passed);
+
+  if (debugEnabled_) {
+    static std::atomic<uint64_t> evalCount{0};
+    auto cnt = ++evalCount;
+    if (cnt <= 5 || cnt % 200 == 0) {
+      auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - filterStart).count();
+      LOG(INFO) << "[ShardMgr-dbg] evaluateFilter#" << cnt
+                << " inputRows=" << numRows
+                << " passed=" << passed
+                << " filtered=" << (numRows - passed)
+                << " elapsedUs=" << elapsedUs;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

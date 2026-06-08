@@ -9,16 +9,30 @@
 
 #include <glog/logging.h>
 
+#include <folly/json.h>
+
 #include "velox/buffer/Buffer.h"
-#include "velox/exec/Task.h"
+#include "velox/core/Expressions.h"
+#include "velox/exec/Driver.h"
 #include "velox/expression/Expr.h"
-#include "velox/vector/DecodedVector.h"
+#include "velox/type/fbhive/HiveTypeSerializer.h"
 
 namespace gluten {
 namespace shard {
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
+
+static void collectFieldAccesses(
+    const core::TypedExprPtr& expr,
+    std::unordered_set<std::string>& fields) {
+  if (auto fa = std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr)) {
+    fields.insert(fa->name());
+  }
+  for (const auto& input : expr->inputs()) {
+    collectFieldAccesses(input, fields);
+  }
+}
 
 
 // ---------------------------------------------------------------------------
@@ -131,18 +145,95 @@ void ShardLookupJoin::initialize() {
     std::vector<core::TypedExprPtr> filters = {filterExpr_};
     filterExprSet_ = std::make_unique<exec::ExprSet>(
         std::move(filters), operatorCtx_->execCtx());
+
+    // --- Server-side filter pushdown preparation ---
+    // Identify which probe columns the filter references, so we can
+    // send only those columns to the server for filter evaluation.
+    std::unordered_set<std::string> referencedFields;
+    collectFieldAccesses(filterExpr_, referencedFields);
+
+    std::vector<std::string> filterProbeNames;
+    std::vector<TypePtr> filterProbeTypes;
+    for (uint32_t i = 0; i < probeType_->size(); ++i) {
+      if (referencedFields.count(probeType_->nameOf(i))) {
+        filterProbeChannels_.push_back(static_cast<column_index_t>(i));
+        filterProbeNames.push_back(probeType_->nameOf(i));
+        filterProbeTypes.push_back(probeType_->childAt(i));
+      }
+    }
+    if (!filterProbeChannels_.empty()) {
+      filterProbeType_ = ROW(
+          std::move(filterProbeNames), std::move(filterProbeTypes));
+    }
+
+    // Serialize filter expression as Velox ISerializable JSON.
+    // TODO(perf): filter expression is identical across all RPCs for this
+    // operator. A future optimization is to distribute it once during the
+    // ColumnarShardExchange build phase and have the server pre-compile,
+    // eliminating per-RPC overhead.
+    Type::registerSerDe();
+    core::ITypedExpr::registerSerDe();
+    filterExprJson_ = folly::toJson(filterExpr_->serialize());
+
+    // Build Hive-format type strings for the server.
+    // filterInputType_ uses only the referenced probe columns (not full probeType)
+    // as its probe-side prefix, matching how we send probe data.
+    if (filterProbeType_) {
+      filterProbeTypeStr_ =
+          type::fbhive::HiveTypeSerializer::serialize(filterProbeType_);
+
+      // Server-side filterInputType = concat(filterProbeType, buildOutputType)
+      std::vector<std::string> serverNames;
+      std::vector<TypePtr> serverTypes;
+      for (uint32_t i = 0; i < filterProbeType_->size(); ++i) {
+        serverNames.push_back(filterProbeType_->nameOf(i));
+        serverTypes.push_back(filterProbeType_->childAt(i));
+      }
+      for (uint32_t i = 0; i < buildOutputType_->size(); ++i) {
+        serverNames.push_back(buildOutputType_->nameOf(i));
+        serverTypes.push_back(buildOutputType_->childAt(i));
+      }
+      auto serverFilterInputType = ROW(
+          std::move(serverNames), std::move(serverTypes));
+      serverFilterInputType_ = serverFilterInputType;
+      filterInputTypeStr_ =
+          type::fbhive::HiveTypeSerializer::serialize(serverFilterInputType);
+
+      // Pre-build dedup type = concat(probeKeyType, filterProbeType).
+      std::vector<std::string> dedupNames;
+      std::vector<TypePtr> dedupTypes;
+      for (size_t k = 0; k < numKeys_; ++k) {
+        dedupNames.push_back(probeKeyType_->nameOf(k));
+        dedupTypes.push_back(probeKeyType_->childAt(k));
+      }
+      for (uint32_t i = 0; i < filterProbeType_->size(); ++i) {
+        dedupNames.push_back(filterProbeType_->nameOf(i));
+        dedupTypes.push_back(filterProbeType_->childAt(i));
+      }
+      dedupWithFilterType_ = ROW(
+          std::move(dedupNames), std::move(dedupTypes));
+    }
+
+    if (debugEnabled_) {
+      std::string filterProbeColNames;
+      for (size_t i = 0; i < filterProbeChannels_.size(); ++i) {
+        if (i > 0) filterProbeColNames += ",";
+        filterProbeColNames += probeType_->nameOf(filterProbeChannels_[i]);
+      }
+      LOG(INFO) << "[SLJ-dbg] filterPushdown enabled"
+                << " filterProbeColumns=[" << filterProbeColNames << "]"
+                << " filterExprJsonLen=" << filterExprJson_.size()
+                << " filterProbeType=" << filterProbeTypeStr_
+                << " filterInputType=" << filterInputTypeStr_;
+    }
   }
 
-  // Fetch BF from VeloxShardManager.
+  // Fetch shared BF from VeloxShardManager (executor-level cache).
   auto* shardManager = VeloxShardManager::getInstance();
-  auto bfData = shardManager->fetchBloomFilter(shardSetId_, -1);
-  if (!bfData.empty()) {
-    bloomFilter_.merge(bfData.data());
-  }
+  bloomFilter_ = shardManager->getOrLoadBloomFilter(shardSetId_);
 
   // Create gRPC completion queue and drain thread.
   completionQueue_ = std::make_unique<grpc::CompletionQueue>();
-  drainRunning_ = true;
   drainThread_ = std::thread([this]() {
     void* tag;
     bool ok;
@@ -215,16 +306,24 @@ void ShardLookupJoin::addInput(RowVectorPtr input) {
   VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_GT(input->size(), 0);
 
+  auto startNanos = debugEnabled_
+      ? std::chrono::steady_clock::now()
+      : std::chrono::steady_clock::time_point{};
+
   auto batchIndex = nextBatchId_++;
   auto& entry = inputBatches_[batchIndex];
   entry.batch = input;
 
-  if (debugEnabled_ && batchIndex % 100 == 0) {
-    LOG(INFO) << "[SLJ-dbg] addInput batch=" << batchIndex
-              << " retained=" << inputBatches_.size()
-              << " refCount=" << totalRetainedRefCount_
-              << " inFlight=" << numInFlight_.load(std::memory_order_relaxed)
-              << " rows=" << input->size();
+  if (debugEnabled_) {
+    totalInputRows_ += input->size();
+    if (batchIndex % 100 == 0) {
+      LOG(INFO) << "[SLJ-dbg] addInput batch=" << batchIndex
+                << " retained=" << inputBatches_.size()
+                << " refCount=" << totalRetainedRefCount_
+                << " inFlight=" << numInFlight_.load(std::memory_order_relaxed)
+                << " rows=" << input->size()
+                << " totalIn=" << totalInputRows_;
+    }
   }
 
   // refCount is incremented per row that references this batch (routed to
@@ -233,7 +332,7 @@ void ShardLookupJoin::addInput(RowVectorPtr input) {
   // erased at the end of this call.
 
   const auto numRows = input->size();
-  const bool bfActive = bloomFilter_.isSet();
+  const bool bfActive = bloomFilter_ && bloomFilter_->isSet();
 
   // Optimization 1: columnar batch hash.
   //
@@ -290,9 +389,11 @@ void ShardLookupJoin::addInput(RowVectorPtr input) {
   // These are materialized eagerly into output RowVectors so they never
   // pin this batch via refCount.
   std::vector<vector_size_t> bfNegativeIndices;
+  vector_size_t batchBfNeg = 0;
   for (vector_size_t row = 0; row < numRows; ++row) {
     if (bfActive &&
-        !bloomFilter_.mayContain(spreadHashForBloom(bfHashes_[row]))) {
+        !bloomFilter_->mayContain(spreadHashForBloom(bfHashes_[row]))) {
+      ++batchBfNeg;
       if (isLeftJoin) {
         bfNegativeIndices.push_back(row);
       }
@@ -306,6 +407,10 @@ void ShardLookupJoin::addInput(RowVectorPtr input) {
     bufferRow(mod, batchIndex, row);
     ++entry.refCount;
     ++totalRetainedRefCount_;
+  }
+  if (debugEnabled_) {
+    bfNegativeRows_ += batchBfNeg;
+    bfPositiveRows_ += (numRows - batchBfNeg);
   }
 
   // No row referenced this batch — release immediately.
@@ -346,6 +451,10 @@ void ShardLookupJoin::addInput(RowVectorPtr input) {
     pendingBfNegativeOutputs_.push(std::move(result));
   }
 
+  if (debugEnabled_) {
+    addInputNanos_ += std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - startNanos).count();
+  }
 }
 
 BlockingReason ShardLookupJoin::isBlocked(ContinueFuture* future) {
@@ -396,10 +505,17 @@ RowVectorPtr ShardLookupJoin::getOutput() {
   if (currentLookup_ == nullptr) {
     std::unique_lock<std::mutex> lock(completedMutex_);
     if (completedQueue_.empty() && numInFlight_ > 0) {
+      auto waitStart = debugEnabled_
+          ? std::chrono::steady_clock::now()
+          : std::chrono::steady_clock::time_point{};
       completedCv_.wait(lock, [this] {
         return !completedQueue_.empty() || numInFlight_ == 0 ||
             hasFatalError_.load(std::memory_order_acquire);
       });
+      if (debugEnabled_) {
+        getOutputWaitNanos_ += std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - waitStart).count();
+      }
     }
     // Re-check fatal error after waking up.
     if (hasFatalError_.load(std::memory_order_acquire)) {
@@ -426,6 +542,11 @@ RowVectorPtr ShardLookupJoin::getOutput() {
       }
       currentLookup_ = std::move(lookup);
       currentLookupOutputRow_ = 0;
+      if (currentLookup_->totalOutputRows == 0) {
+        releaseProbeRefs(currentLookup_->probeRows);
+        currentLookup_ = nullptr;
+        continue;
+      }
       break;
     }
   }
@@ -496,6 +617,9 @@ RowVectorPtr ShardLookupJoin::getOutput() {
   }
 
   if (result && result->size() > 0) {
+    if (debugEnabled_) {
+      totalProducedRows_ += result->size();
+    }
     return result;
   }
   return nullptr;
@@ -528,8 +652,41 @@ bool ShardLookupJoin::isFinished() {
 }
 
 void ShardLookupJoin::close() {
+  if (debugEnabled_) {
+    LOG(INFO) << "[SLJ-dbg] close() cumulative stats:"
+              << " totalInputRows=" << totalInputRows_
+              << " bfNeg=" << bfNegativeRows_
+              << " bfPos=" << bfPositiveRows_
+              << " rpcIssued=" << rpcIssuedCount_
+              << " rpcDone=" << rpcCompletedCount_
+              << " localLookups=" << localLookupCount_
+              << " flushes=" << flushShardCount_
+              << " totalBuildRows=" << totalBuildOutputRows_
+              << " totalProducedRows=" << totalProducedRows_
+              << " getOutputCalls=" << getOutputCalls_;
+    LOG(INFO) << "[SLJ-dbg] close() timing (wall-clock, includes waits):"
+              << " addInputMs=" << (addInputNanos_ / 1000000)
+              << " flushShardMs=" << (flushShardNanos_ / 1000000)
+              << " getOutputWaitMs=" << (getOutputWaitNanos_ / 1000000)
+              << " localLookupMs=" << (localLookupNanos_ / 1000000);
+    auto* driver = operatorCtx_->driverCtx()->driver;
+    if (driver) {
+      for (auto* op : driver->operators()) {
+        auto opStats = op->stats(false);
+        LOG(INFO) << "[SLJ-dbg] pipeline op[" << opStats.operatorId << "] "
+                  << opStats.operatorType
+                  << ": getOutputMs=" << (opStats.getOutputTiming.wallNanos / 1000000)
+                  << " getOutputCpu=" << (opStats.getOutputTiming.cpuNanos / 1000000)
+                  << " addInputMs=" << (opStats.addInputTiming.wallNanos / 1000000)
+                  << " addInputCpu=" << (opStats.addInputTiming.cpuNanos / 1000000)
+                  << " outputRows=" << opStats.outputPositions
+                  << " outputBatches=" << opStats.outputVectors
+                  << " inputRows=" << opStats.inputPositions;
+      }
+    }
+  }
+
   Operator::close();
-  drainRunning_ = false;
   if (completionQueue_) {
     completionQueue_->Shutdown();
   }
@@ -572,65 +729,6 @@ void ShardLookupJoin::close() {
   stubCache_.clear();
 }
 
-// ---------------------------------------------------------------------------
-// Shard routing
-// ---------------------------------------------------------------------------
-int32_t ShardLookupJoin::computeShardId(
-    const RowVectorPtr& input,
-    vector_size_t row) const {
-  int32_t hash = 42;
-  for (size_t k = 0; k < numKeys_; ++k) {
-    hash = hashKeyColumnForShard(input, k, row, hash);
-  }
-  int32_t mod = hash % numShards_;
-  if (mod < 0) {
-    mod += numShards_;
-  }
-  return mod;
-}
-
-int32_t ShardLookupJoin::hashKeyColumnForShard(
-    const RowVectorPtr& input,
-    size_t keyIdx,
-    vector_size_t row,
-    int32_t seed) const {
-  auto colIndex = leftKeyChannels_[keyIdx];
-  if (!castToBigintFlags_[keyIdx]) {
-    return SparkMurmurHash::hashColumnAt(input, colIndex, row, seed);
-  }
-  // Cast to bigint before hashing (matches Spark's Cast(key, LongType)).
-  auto child = input->childAt(colIndex);
-  if (child->isNullAt(row)) {
-    return seed;
-  }
-  auto typeKind = child->typeKind();
-  switch (typeKind) {
-    case TypeKind::BOOLEAN:
-      return SparkMurmurHash::hashLong(
-          child->as<SimpleVector<bool>>()->valueAt(row) ? 1L : 0L, seed);
-    case TypeKind::TINYINT:
-      return SparkMurmurHash::hashLong(
-          static_cast<int64_t>(
-              child->as<SimpleVector<int8_t>>()->valueAt(row)),
-          seed);
-    case TypeKind::SMALLINT:
-      return SparkMurmurHash::hashLong(
-          static_cast<int64_t>(
-              child->as<SimpleVector<int16_t>>()->valueAt(row)),
-          seed);
-    case TypeKind::INTEGER:
-      return SparkMurmurHash::hashLong(
-          static_cast<int64_t>(
-              child->as<SimpleVector<int32_t>>()->valueAt(row)),
-          seed);
-    case TypeKind::BIGINT:
-      return SparkMurmurHash::hashLong(
-          child->as<SimpleVector<int64_t>>()->valueAt(row), seed);
-    default:
-      return SparkMurmurHash::hashColumnAt(input, colIndex, row, seed);
-  }
-}
-
 
 void ShardLookupJoin::setFatalError(const std::string& message) {
   std::lock_guard<std::mutex> lock(fatalErrorMutex_);
@@ -669,6 +767,12 @@ void ShardLookupJoin::flushShard(int32_t shardId) {
   if (it == shardBuffers_.end() || it->second.rows.empty()) {
     return;
   }
+  auto startNanos = debugEnabled_
+      ? std::chrono::steady_clock::now()
+      : std::chrono::steady_clock::time_point{};
+  if (debugEnabled_) {
+    ++flushShardCount_;
+  }
   auto rows = std::move(it->second.rows);
   it->second.rows.clear();
 
@@ -685,6 +789,19 @@ void ShardLookupJoin::flushShard(int32_t shardId) {
   auto allKeys = std::make_shared<RowVector>(
       pool(), probeKeyType_, nullptr, numRows, std::move(keyColumns));
 
+  // Gather filter probe columns if server-side filter pushdown is active.
+  RowVectorPtr filterProbeColumns;
+  if (filterExpr_ && !filterProbeChannels_.empty()) {
+    std::vector<VectorPtr> filterCols(filterProbeChannels_.size());
+    for (size_t i = 0; i < filterProbeChannels_.size(); ++i) {
+      auto channel = filterProbeChannels_[i];
+      auto colType = probeType_->childAt(channel);
+      filterCols[i] = gatherProbeKeyColumnAsDictionary(channel, colType, rows);
+    }
+    filterProbeColumns = std::make_shared<RowVector>(
+        pool(), filterProbeType_, nullptr, numRows, std::move(filterCols));
+  }
+
   // --- Probe key dedup (mirrors Spark DMJ's KeyValueBatch.wrapKeysBuffer) ---
   //
   // Serialize each probe key to CompactRow bytes and dedup by content.
@@ -692,12 +809,38 @@ void ShardLookupJoin::flushShard(int32_t shardId) {
   // original probeRow indices share each unique key so results can be
   // expanded after the RPC returns.
   //
+  // When server-side filter is active, the dedup key includes both probe
+  // keys and filter probe columns. This prevents rows with same key but
+  // different filter column values from being merged (which would cause
+  // incorrect server-side filter evaluation).
+  //
   // For a batch with K unique keys out of N total rows, this reduces:
   //   - RPC payload size by (N-K)/N
   //   - Server-side joinProbe calls from N to K
   //   - Server-side extractColumn rows from N*fanout to K*fanout
   //   - Response size from N*fanout to K*fanout
-  facebook::velox::row::CompactRow compactRow(allKeys);
+
+  // Build the RowVector used for dedup serialization.
+  // Without filter: dedup by probe keys only.
+  // With filter: dedup by concat(probeKeys, filterProbeColumns).
+  RowVectorPtr dedupInput;
+  if (filterProbeColumns) {
+    std::vector<VectorPtr> combinedCols;
+    combinedCols.reserve(numKeys_ + filterProbeChannels_.size());
+    for (size_t k = 0; k < numKeys_; ++k) {
+      combinedCols.push_back(allKeys->childAt(k));
+    }
+    for (size_t i = 0; i < filterProbeChannels_.size(); ++i) {
+      combinedCols.push_back(filterProbeColumns->childAt(i));
+    }
+    dedupInput = std::make_shared<RowVector>(
+        pool(), dedupWithFilterType_, nullptr, numRows,
+        std::move(combinedCols));
+  } else {
+    dedupInput = allKeys;
+  }
+
+  facebook::velox::row::CompactRow compactRow(dedupInput);
 
   // Two-pass serialize into a single contiguous buffer to avoid N heap
   // allocations (one std::string per row).  Pass 1 computes sizes/offsets;
@@ -762,12 +905,44 @@ void ShardLookupJoin::flushShard(int32_t shardId) {
     probeKeys = std::make_shared<RowVector>(
         pool(), probeKeyType_, nullptr, numUniqueKeys,
         std::move(uniqueKeyColumns));
+
+    // Slice filter probe columns to unique rows as well.
+    if (filterProbeColumns) {
+      std::vector<VectorPtr> uniqueFilterCols(filterProbeChannels_.size());
+      for (size_t i = 0; i < filterProbeChannels_.size(); ++i) {
+        uniqueFilterCols[i] = BaseVector::wrapInDictionary(
+            /*nulls=*/nullptr, indexBuf, numUniqueKeys,
+            filterProbeColumns->childAt(i));
+      }
+      filterProbeColumns = std::make_shared<RowVector>(
+          pool(), filterProbeType_, nullptr, numUniqueKeys,
+          std::move(uniqueFilterCols));
+    }
   }
 
   if (localShards_.count(shardId) > 0) {
-    issueLocalLookup(shardId, probeKeys, std::move(rows), std::move(dedupMap));
+    issueLocalLookup(
+        shardId, probeKeys, std::move(rows), std::move(dedupMap),
+        filterProbeColumns);
   } else {
-    issueRemoteLookup(shardId, probeKeys, std::move(rows), std::move(dedupMap));
+    issueRemoteLookup(
+        shardId, probeKeys, std::move(rows), std::move(dedupMap),
+        filterProbeColumns);
+  }
+
+  if (debugEnabled_) {
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - startNanos).count();
+    flushShardNanos_ += elapsed;
+    if (flushShardCount_ % 50 == 0) {
+      LOG(INFO) << "[SLJ-dbg] flushShard#" << flushShardCount_
+                << " shard=" << shardId
+                << " rows=" << numRows
+                << " uniqueKeys=" << numUniqueKeys
+                << " thisMs=" << (elapsed / 1000000)
+                << " cumulMs=" << (flushShardNanos_ / 1000000)
+                << " local=" << (localShards_.count(shardId) > 0);
+    }
   }
 }
 
@@ -856,14 +1031,37 @@ void ShardLookupJoin::issueLocalLookup(
     int32_t shardId,
     RowVectorPtr probeKeys,
     std::vector<BufferedRow> probeRows,
-    DedupMap dedupMap) {
+    DedupMap dedupMap,
+    RowVectorPtr filterProbeColumns) {
+  auto startNanos = debugEnabled_
+      ? std::chrono::steady_clock::now()
+      : std::chrono::steady_clock::time_point{};
+  if (debugEnabled_) {
+    ++localLookupCount_;
+  }
   auto* shardManager = VeloxShardManager::getInstance();
   auto numRows = static_cast<int32_t>(probeKeys->size());
   std::vector<int32_t> inputIndices(numRows);
   std::iota(inputIndices.begin(), inputIndices.end(), 0);
 
   auto result = shardManager->lookup(
-      shardSetId_, shardId, probeKeys, inputIndices, pool());
+      shardSetId_, shardId, probeKeys, inputIndices, pool(),
+      filterProbeColumns, filterExprJson_, nullptr, serverFilterInputType_);
+
+  if (debugEnabled_) {
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - startNanos).count();
+    localLookupNanos_ += elapsed;
+    if (localLookupCount_ % 50 == 0) {
+      auto buildRows = (result.output ? result.output->size() : 0);
+      LOG(INFO) << "[SLJ-dbg] localLookup#" << localLookupCount_
+                << " shard=" << shardId
+                << " probeKeys=" << numRows
+                << " buildRows=" << buildRows
+                << " thisMs=" << (elapsed / 1000000)
+                << " cumulMs=" << (localLookupNanos_ / 1000000);
+    }
+  }
 
   if (result.output && result.output->size() > 0 && !dedupMap.empty()) {
     // Expand dedup'd result back to original probe row indices.
@@ -935,7 +1133,8 @@ void ShardLookupJoin::issueRemoteLookup(
     int32_t shardId,
     RowVectorPtr probeKeys,
     std::vector<BufferedRow> probeRows,
-    DedupMap dedupMap) {
+    DedupMap dedupMap,
+    RowVectorPtr filterProbeColumns) {
   numInFlight_++;
   ++rpcIssuedCount_;
 
@@ -944,6 +1143,7 @@ void ShardLookupJoin::issueRemoteLookup(
               << " shard=" << shardId
               << " probeRows=" << probeRows.size()
               << " probeKeys=" << probeKeys->size()
+              << " filterCols=" << (filterProbeColumns ? filterProbeColumns->size() : 0)
               << " inFlight=" << numInFlight_.load(std::memory_order_relaxed);
   }
 
@@ -962,30 +1162,55 @@ void ShardLookupJoin::issueRemoteLookup(
     ctx->request.add_input_indices(i);
   }
 
+  // Set server-side filter pushdown fields.
+  // TODO(perf): filter_expression / probe_columns_type / filter_input_type
+  // are identical across all RPCs. Future optimization: distribute once
+  // during ColumnarShardExchange build phase.
+  if (filterProbeColumns && filterProbeColumns->size() > 0 &&
+      !filterExprJson_.empty()) {
+    ctx->request.set_probe_filter_columns_compact(
+        serializeCompactRowBatch(filterProbeColumns, pool()));
+    ctx->request.set_filter_expression(filterExprJson_);
+    ctx->request.set_probe_columns_type(filterProbeTypeStr_);
+    ctx->request.set_filter_input_type(filterInputTypeStr_);
+  }
+
   ctx->clientCtx.set_deadline(
       std::chrono::system_clock::now() + std::chrono::seconds(120));
 
   std::string target;
+  auto* shardManager = VeloxShardManager::getInstance();
   {
     std::lock_guard<std::mutex> lock(routeMutex_);
-    // Round-robin across replicas for this shard.
+    // Round-robin across replicas for this shard, skipping blacklisted
+    // addresses (executor-level dead address list).
     auto locIt = shardLocationMap_.find(shardId);
     bool needRefresh = (locIt == shardLocationMap_.end() ||
                         locIt->second.empty());
     if (!needRefresh) {
+      auto& locs = locIt->second;
       auto& idx = shardReplicaRRIndex_[shardId];
-      const auto& loc = locIt->second[idx % locIt->second.size()];
-      target = loc.host + ":" + std::to_string(loc.port);
-      idx++;
+      auto numReplicas = locs.size();
+      for (size_t attempt = 0; attempt < numReplicas; ++attempt) {
+        const auto& loc = locs[(idx + attempt) % numReplicas];
+        auto addr = loc.host + ":" + std::to_string(loc.port);
+        if (!shardManager->isAddressDead(addr)) {
+          target = addr;
+          idx += attempt + 1;
+          break;
+        }
+      }
+      if (target.empty()) {
+        needRefresh = true;
+      }
     }
   }
 
-  // If no locations available (e.g. all replicas removed by failover),
-  // refresh from master before giving up.
+  // If no locations available (e.g. all replicas removed by failover or
+  // blacklisted), refresh from master before giving up.
   if (target.empty()) {
     LOG(WARNING) << "ShardLookupJoin::issueRemoteLookup: no locations for "
                  << "shard " << shardId << ", refreshing from master";
-    auto* shardManager = VeloxShardManager::getInstance();
     auto freshLocations =
         shardManager->refreshShardLocations(shardSetId_, shardId);
     {
@@ -1005,14 +1230,21 @@ void ShardLookupJoin::issueRemoteLookup(
       if (!updatedLocs.empty()) {
         auto& idx = shardReplicaRRIndex_[shardId];
         idx = static_cast<size_t>(std::rand() % updatedLocs.size());
-        const auto& loc = updatedLocs[idx % updatedLocs.size()];
-        target = loc.host + ":" + std::to_string(loc.port);
-        idx++;
+        for (size_t i = 0; i < updatedLocs.size(); ++i) {
+          const auto& loc = updatedLocs[(idx + i) % updatedLocs.size()];
+          auto addr = loc.host + ":" + std::to_string(loc.port);
+          if (!shardManager->isAddressDead(addr)) {
+            target = addr;
+            idx += i + 1;
+            break;
+          }
+        }
       }
     }
     VELOX_CHECK(
         !target.empty(),
-        "issueRemoteLookup: no locations for shard {} even after refresh",
+        "issueRemoteLookup: no live locations for shard {} even after refresh"
+        " (all blacklisted or empty)",
         shardId);
   }
 
@@ -1037,11 +1269,12 @@ void ShardLookupJoin::retryRemoteLookup(std::unique_ptr<RpcContext> oldCtx) {
   const auto shardId = oldCtx->shardId;
   auto triedTargets = std::move(oldCtx->triedTargets);
   auto lastError = std::move(oldCtx->lastErrorMsg);
+  auto* shardManager = VeloxShardManager::getInstance();
 
   // --- Determine next target ---
-  // Find the first untried replica from the local shardLocationMap_.
-  // This is per-RpcContext (via triedTargets), so concurrent RPCs for the
-  // same shard don't interfere — each has its own triedTargets set.
+  // Find the first untried, non-blacklisted replica from the local
+  // shardLocationMap_.  This is per-RpcContext (via triedTargets), so
+  // concurrent RPCs for the same shard don't interfere.
   // If all local replicas are exhausted, refresh from master.
   std::string newTarget;
   {
@@ -1050,7 +1283,8 @@ void ShardLookupJoin::retryRemoteLookup(std::unique_ptr<RpcContext> oldCtx) {
     if (locIt != shardLocationMap_.end()) {
       for (const auto& loc : locIt->second) {
         auto addr = loc.host + ":" + std::to_string(loc.port);
-        if (triedTargets.count(addr) == 0) {
+        if (triedTargets.count(addr) == 0 &&
+            !shardManager->isAddressDead(addr)) {
           newTarget = addr;
           break;
         }
@@ -1059,11 +1293,9 @@ void ShardLookupJoin::retryRemoteLookup(std::unique_ptr<RpcContext> oldCtx) {
   }
 
   if (newTarget.empty()) {
-    // All local replicas tried → refresh from master (= Spark's
-    // `if (tail.isEmpty) locations(refresh = true).filterNot(triedLocs)`).
+    // All local replicas tried or blacklisted → refresh from master.
     LOG(WARNING) << "ShardLookupJoin: all local replicas tried for shard "
                  << shardId << ", refreshing locations from master";
-    auto* shardManager = VeloxShardManager::getInstance();
     auto freshLocations =
         shardManager->refreshShardLocations(shardSetId_, shardId);
 
@@ -1109,21 +1341,21 @@ void ShardLookupJoin::retryRemoteLookup(std::unique_ptr<RpcContext> oldCtx) {
       }
     }
 
-    // Find the first untried location from the refreshed list.
+    // Find the first untried, non-blacklisted location from the refreshed list.
     newTarget.clear();
     for (const auto& loc : freshLocations) {
-      if (triedTargets.count(loc) == 0) {
+      if (triedTargets.count(loc) == 0 &&
+          !shardManager->isAddressDead(loc)) {
         newTarget = loc;
         break;
       }
     }
     if (newTarget.empty()) {
-      // = Spark's `case Nil => Future.failed(new SparkException(...))`
       std::string fatalMsg =
-          "ShardLookupJoin: no untried replicas available for shard " +
+          "ShardLookupJoin: no live untried replicas for shard " +
           std::to_string(shardId) + " after refreshShardLocations " +
           "(tried " + std::to_string(triedTargets.size()) +
-          " replicas), last RPC error: " + lastError;
+          " replicas, remaining blacklisted), last RPC error: " + lastError;
       LOG(ERROR) << fatalMsg;
       failRetry(fatalMsg);
       return;
@@ -1204,6 +1436,11 @@ void ShardLookupJoin::handleRpcCompletion(RpcContext* ctx, bool ok) {
       stubCache_.erase(ctx->lastTarget);
     }
 
+    // Mark at executor level so other SLJ instances also skip this address.
+    if (!ctx->lastTarget.empty()) {
+      VeloxShardManager::getInstance()->markAddressDead(ctx->lastTarget);
+    }
+
     // Mirrors Spark fetchRemoteBatch: immediately try next replica (no backoff).
     // retryRemoteLookup handles failover → refresh → fatal-if-exhausted.
     retryRemoteLookup(std::move(owned));
@@ -1248,6 +1485,9 @@ void ShardLookupJoin::handleRpcCompletion(RpcContext* ctx, bool ok) {
       completedQueue_.push(std::move(completed));
     }
     ++rpcCompletedCount_;
+    if (debugEnabled_) {
+      totalBuildOutputRows_ += outputRows;
+    }
     if (debugEnabled_ && rpcCompletedCount_ % 50 == 0) {
       LOG(INFO) << "[SLJ-dbg] rpcDone#" << rpcCompletedCount_
                 << " shard=" << ctx->shardId
@@ -1315,11 +1555,6 @@ void ShardLookupJoin::onRpcComplete(
   completedCv_.notify_all();
 }
 
-bool ShardLookupJoin::hasCompletedLookup() const {
-  std::lock_guard<std::mutex> lock(completedMutex_);
-  return !completedQueue_.empty();
-}
-
 // ---------------------------------------------------------------------------
 // Output projection
 // ---------------------------------------------------------------------------
@@ -1358,18 +1593,6 @@ static RowVectorPtr prepareOutputVector(
     output = std::static_pointer_cast<RowVector>(tmp);
   }
   return output;
-}
-
-/// Copy a single probe row's projected columns to output at outIdx.
-void ShardLookupJoin::copyProbeRow(
-    const BufferedRow& br,
-    vector_size_t outIdx) {
-  const auto& batch = inputBatches_.at(br.batchIndex).batch;
-  for (const auto& proj : probeOutputProjections_) {
-    output_->childAt(proj.outputChannel)->copy(
-        batch->childAt(proj.inputChannel).get(),
-        outIdx, br.rowIndex, 1);
-  }
 }
 
 
@@ -1577,92 +1800,6 @@ VectorPtr ShardLookupJoin::gatherProbeKeyColumnAsDictionary(
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Post-join filter
-// ---------------------------------------------------------------------------
-RowVectorPtr ShardLookupJoin::applyFilter(const RowVectorPtr& output) {
-  if (!filterExprSet_ || !output || output->size() == 0) {
-    return output;
-  }
-
-  auto numRows = output->size();
-
-  // Build filter input: a RowVector with filterInputType_ column layout.
-  // The output_ already has columns arranged by probeOutputProjections_ and
-  // buildOutputProjections_, but the filter expression references columns
-  // by their original names in concat(probeType, buildOutputType).  Build
-  // a wrapper RowVector that maps those names to the right output columns.
-  std::vector<VectorPtr> filterCols(filterInputType_->size());
-  for (uint32_t i = 0; i < probeType_->size(); ++i) {
-    const auto& name = probeType_->nameOf(i);
-    auto outIdx = outputType_->getChildIdxIfExists(name);
-    if (outIdx.has_value()) {
-      filterCols[i] = output->childAt(outIdx.value());
-    } else {
-      filterCols[i] = BaseVector::createNullConstant(
-          probeType_->childAt(i), numRows, pool());
-    }
-  }
-  for (uint32_t i = 0; i < buildOutputType_->size(); ++i) {
-    const auto& name = buildOutputType_->nameOf(i);
-    auto outIdx = outputType_->getChildIdxIfExists(name);
-    auto filterIdx = probeType_->size() + i;
-    if (outIdx.has_value()) {
-      filterCols[filterIdx] = output->childAt(outIdx.value());
-    } else {
-      filterCols[filterIdx] = BaseVector::createNullConstant(
-          buildOutputType_->childAt(i), numRows, pool());
-    }
-  }
-
-  auto filterInput = std::make_shared<RowVector>(
-      pool(), filterInputType_, nullptr, numRows, std::move(filterCols));
-
-  // Evaluate the filter expression.
-  SelectivityVector allRows(numRows);
-  exec::EvalCtx evalCtx(
-      operatorCtx_->execCtx(), filterExprSet_.get(), filterInput.get());
-  std::vector<VectorPtr> filterResult(1);
-  filterExprSet_->eval(0, 1, true, allRows, evalCtx, filterResult);
-
-  // Decode filter result to find passing rows.
-  DecodedVector decodedFilter(*filterResult[0], allRows);
-  vector_size_t numPassed = 0;
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    if (!decodedFilter.isNullAt(i) && decodedFilter.valueAt<bool>(i)) {
-      ++numPassed;
-    }
-  }
-
-  // All rows pass — no filtering needed.
-  if (numPassed == numRows) {
-    return output;
-  }
-
-  // No rows pass.
-  if (numPassed == 0) {
-    return nullptr;
-  }
-
-  // Build indices of passing rows and wrap output columns in Dictionary.
-  auto indexBuf = AlignedBuffer::allocate<vector_size_t>(numPassed, pool());
-  auto* rawIdx = indexBuf->asMutable<vector_size_t>();
-  vector_size_t pos = 0;
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    if (!decodedFilter.isNullAt(i) && decodedFilter.valueAt<bool>(i)) {
-      rawIdx[pos++] = i;
-    }
-  }
-
-  std::vector<VectorPtr> filteredCols(output->childrenSize());
-  for (size_t c = 0; c < output->childrenSize(); ++c) {
-    filteredCols[c] = BaseVector::wrapInDictionary(
-        nullptr, indexBuf, numPassed, output->childAt(c));
-  }
-  return std::make_shared<RowVector>(
-      pool(), outputType_, nullptr, numPassed, std::move(filteredCols));
-}
-
 /// Decrement refCounts for all probe-row references and erase any
 /// inputBatches_ entry that drops to zero.  Driver-thread only.
 void ShardLookupJoin::releaseProbeRefs(
@@ -1680,9 +1817,14 @@ void ShardLookupJoin::releaseProbeRefs(
     }
   }
   if (debugEnabled_ && erasedCount > 0 && inputBatches_.size() >= 50) {
-    LOG(INFO) << "[SLJ-dbg] releaseRefs erased=" << erasedCount
-              << " retained=" << inputBatches_.size()
-              << " refCount=" << totalRetainedRefCount_;
+    static std::atomic<uint64_t> releaseRefsLogCount{0};
+    auto cnt = ++releaseRefsLogCount;
+    if (cnt <= 5 || cnt % 100 == 0) {
+      LOG(INFO) << "[SLJ-dbg] releaseRefs#" << cnt
+                << " erased=" << erasedCount
+                << " retained=" << inputBatches_.size()
+                << " refCount=" << totalRetainedRefCount_;
+    }
   }
 }
 
@@ -1734,7 +1876,7 @@ RowVectorPtr ShardLookupJoin::produceOutputForInnerJoin(
   }
 
   currentLookupOutputRow_ += numOutputRows;
-  return applyFilter(output_);
+  return output_;
 }
 
 // ---------------------------------------------------------------------------
@@ -1826,7 +1968,7 @@ RowVectorPtr ShardLookupJoin::produceOutputForLeftJoin(
 
   output_->resize(outIdx);
   currentLookupOutputRow_ += outIdx;
-  return applyFilter(output_);
+  return output_;
 }
 
 

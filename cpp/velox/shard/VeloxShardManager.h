@@ -2,6 +2,7 @@
 
 #include <jni.h>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -12,8 +13,10 @@
 #include <folly/Synchronized.h>
 #include <folly/SharedMutex.h>
 
+#include "BloomFilter64.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/exec/HashTable.h"
+#include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -74,6 +77,14 @@ class VeloxShardManager {
   // Returns serialized BF bytes, or empty string if not found.
   std::string fetchBloomFilter(int64_t setId, int32_t shardId);
 
+  // Returns a shared, executor-level BloomFilter for the given shard set.
+  // The BF is loaded from BlockManager on first access and cached for
+  // subsequent callers.  All ShardLookupJoin instances share the same
+  // read-only BF, avoiding per-task memory duplication.
+  // Returns nullptr if no BF is available for this set.
+  std::shared_ptr<const BloomFilter64>
+  getOrLoadBloomFilter(int64_t setId);
+
   struct LookupResult {
     // outputPool must be declared before output so that it is destroyed
     // after output (C++ destroys members in reverse declaration order).
@@ -104,7 +115,11 @@ class VeloxShardManager {
       int32_t shardId,
       const facebook::velox::RowVectorPtr& probeKeys,
       const std::vector<int32_t>& inputIndices,
-      facebook::velox::memory::MemoryPool* rpcPool);
+      facebook::velox::memory::MemoryPool* rpcPool,
+      const facebook::velox::RowVectorPtr& probeFilterColumns = nullptr,
+      const std::string& filterExprJson = "",
+      const facebook::velox::RowTypePtr& probeColumnsType = nullptr,
+      const facebook::velox::RowTypePtr& filterInputType = nullptr);
 
   // Lookup probe keys in the hash table for the given shard.
   // If callerPool is non-null, output vectors are allocated from it directly
@@ -116,7 +131,11 @@ class VeloxShardManager {
       int32_t shardId,
       const facebook::velox::RowVectorPtr& probeKeys,
       const std::vector<int32_t>& inputIndices,
-      facebook::velox::memory::MemoryPool* callerPool = nullptr);
+      facebook::velox::memory::MemoryPool* callerPool = nullptr,
+      const facebook::velox::RowVectorPtr& probeFilterColumns = nullptr,
+      const std::string& filterExprJson = "",
+      const facebook::velox::RowTypePtr& probeColumnsType = nullptr,
+      const facebook::velox::RowTypePtr& filterInputType = nullptr);
 
   // Returns the key RowType for the given shard, derived from the HashTable's
   // VectorHashers.  Used by VeloxShardRpcServer / ShardLookupJoin to
@@ -156,6 +175,41 @@ class VeloxShardManager {
   VeloxShardManager(const VeloxShardManager&) = delete;
   VeloxShardManager& operator=(const VeloxShardManager&) = delete;
 
+  /// Debug mode enabled by env GLUTEN_SHARD_DMJ_DEBUG=1 (checked in initialize).
+  bool debugEnabled_{false};
+
+  // --- Server-side join condition eval (filter pushdown) ---
+
+  struct CachedFilter {
+    // pool must be declared before queryCtx/execCtx/exprSet so it is
+    // destroyed after them (C++ destroys members in reverse order).
+    // execCtx holds pool.get() as a raw pointer.
+    std::shared_ptr<facebook::velox::memory::MemoryPool> pool;
+    std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx;
+    std::unique_ptr<facebook::velox::core::ExecCtx> execCtx;
+    std::unique_ptr<facebook::velox::exec::ExprSet> exprSet;
+    facebook::velox::RowTypePtr inputType;
+    std::mutex evalMutex;
+  };
+
+  std::shared_ptr<CachedFilter> getOrCompileFilter(
+      int64_t setId,
+      const std::string& filterExprJson,
+      const facebook::velox::RowTypePtr& filterInputType);
+
+  void evaluateFilter(
+      CachedFilter& filter,
+      const facebook::velox::RowVectorPtr& probeFilterColumns,
+      std::vector<int32_t>& inputHits,
+      std::vector<char*>& matchedRows,
+      facebook::velox::exec::RowContainer* rowContainer,
+      facebook::velox::memory::MemoryPool* pool);
+
+  std::mutex filterCacheMutex_;
+  std::unordered_map<int64_t, std::shared_ptr<CachedFilter>> filterCache_;
+
+  // --- End filter pushdown ---
+
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
 
   folly::Synchronized<
@@ -188,6 +242,16 @@ class VeloxShardManager {
       folly::SharedMutexWritePriority>
       setPools_;
 
+  // Per-setId executor-level BloomFilter cache.  Each entry is a merged
+  // set-level BF (shardId=-1), loaded once from BlockManager and shared
+  // read-only by all ShardLookupJoin instances on this executor.
+  folly::Synchronized<
+      std::unordered_map<
+          int64_t,
+          std::shared_ptr<const BloomFilter64>>,
+      folly::SharedMutexWritePriority>
+      bloomFilters_;
+
   // Persistent BlockManagerBridge for reading shard data and BF.
   // Set once during initialize(), immutable thereafter.
   std::shared_ptr<BlockManagerBridge> blockManagerBridge_;
@@ -206,8 +270,7 @@ class VeloxShardManager {
   // Per-shard hash key type — the types used by build-side HashPartitioning
   // to compute shard assignment.  May differ from the data types stored in the
   // HashTable when buildBoundKeys contains cast expressions (e.g.
-  // cast(k as bigint)).  Used by ShardLookupJoin::computeShardId on the probe
-  // side.
+  // cast(k as bigint)).  Used by ShardLookupJoin on the probe side.
   folly::Synchronized<
       std::unordered_map<
           ShardKey,
@@ -262,9 +325,27 @@ class VeloxShardManager {
   std::vector<std::string> refreshShardLocations(
       int64_t setId, int32_t shardId);
 
+  // Mark an address as dead for deadAddressTtl_ (default 10 min).
+  // Thread-safe; called from SLJ drain threads on RPC failure.
+  // All SLJ instances on this executor share the blacklist.
+  void markAddressDead(const std::string& address);
+
+  // Check if an address is currently blacklisted (not expired).
+  // Thread-safe; called from SLJ driver threads during replica selection.
+  bool isAddressDead(const std::string& address);
+
  private:
   // Guards initialize() so it runs at most once until shutdown() resets it.
   std::atomic<bool> initialized_{false};
+
+  // Executor-level dead address blacklist with TTL.
+  // Shared across all SLJ instances.  When an RPC fails, the target
+  // address is added here so other tasks skip it immediately.
+  // Entries expire after deadAddressTtl_ (lazy deletion on query).
+  std::mutex deadAddressMutex_;
+  std::unordered_map<std::string, std::chrono::steady_clock::time_point>
+      deadAddresses_;
+  std::chrono::seconds deadAddressTtl_{600};
 
   // Executor-level gRPC channel cache keyed by "host:port".
   // Shared across all tasks on this executor.  Guarded by channelsMutex_.

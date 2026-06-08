@@ -205,6 +205,10 @@ class LookupRequest final :
   enum : int {
     kInputIndicesFieldNumber = 4,
     kProbeKeysCompactFieldNumber = 3,
+    kProbeFilterColumnsCompactFieldNumber = 5,
+    kFilterExpressionFieldNumber = 6,
+    kProbeColumnsTypeFieldNumber = 7,
+    kFilterInputTypeFieldNumber = 8,
     kSetIdFieldNumber = 1,
     kShardIdFieldNumber = 2,
   };
@@ -244,6 +248,62 @@ class LookupRequest final :
   std::string* _internal_mutable_probe_keys_compact();
   public:
 
+  // bytes probe_filter_columns_compact = 5;
+  void clear_probe_filter_columns_compact();
+  const std::string& probe_filter_columns_compact() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_probe_filter_columns_compact(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_probe_filter_columns_compact();
+  PROTOBUF_NODISCARD std::string* release_probe_filter_columns_compact();
+  void set_allocated_probe_filter_columns_compact(std::string* probe_filter_columns_compact);
+  private:
+  const std::string& _internal_probe_filter_columns_compact() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_probe_filter_columns_compact(const std::string& value);
+  std::string* _internal_mutable_probe_filter_columns_compact();
+  public:
+
+  // string filter_expression = 6;
+  void clear_filter_expression();
+  const std::string& filter_expression() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_filter_expression(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_filter_expression();
+  PROTOBUF_NODISCARD std::string* release_filter_expression();
+  void set_allocated_filter_expression(std::string* filter_expression);
+  private:
+  const std::string& _internal_filter_expression() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_filter_expression(const std::string& value);
+  std::string* _internal_mutable_filter_expression();
+  public:
+
+  // string probe_columns_type = 7;
+  void clear_probe_columns_type();
+  const std::string& probe_columns_type() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_probe_columns_type(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_probe_columns_type();
+  PROTOBUF_NODISCARD std::string* release_probe_columns_type();
+  void set_allocated_probe_columns_type(std::string* probe_columns_type);
+  private:
+  const std::string& _internal_probe_columns_type() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_probe_columns_type(const std::string& value);
+  std::string* _internal_mutable_probe_columns_type();
+  public:
+
+  // string filter_input_type = 8;
+  void clear_filter_input_type();
+  const std::string& filter_input_type() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_filter_input_type(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_filter_input_type();
+  PROTOBUF_NODISCARD std::string* release_filter_input_type();
+  void set_allocated_filter_input_type(std::string* filter_input_type);
+  private:
+  const std::string& _internal_filter_input_type() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_filter_input_type(const std::string& value);
+  std::string* _internal_mutable_filter_input_type();
+  public:
+
   // int64 set_id = 1;
   void clear_set_id();
   int64_t set_id() const;
@@ -273,6 +333,10 @@ class LookupRequest final :
     ::PROTOBUF_NAMESPACE_ID::RepeatedField< int32_t > input_indices_;
     mutable std::atomic<int> _input_indices_cached_byte_size_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr probe_keys_compact_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr probe_filter_columns_compact_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr filter_expression_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr probe_columns_type_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr filter_input_type_;
     int64_t set_id_;
     int32_t shard_id_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
@@ -583,6 +647,10 @@ class ShardLookupEntry final :
   enum : int {
     kInputIndicesFieldNumber = 3,
     kProbeKeysCompactFieldNumber = 2,
+    kProbeFilterColumnsCompactFieldNumber = 4,
+    kFilterExpressionFieldNumber = 5,
+    kProbeColumnsTypeFieldNumber = 6,
+    kFilterInputTypeFieldNumber = 7,
     kShardIdFieldNumber = 1,
   };
   // repeated int32 input_indices = 3;
@@ -621,6 +689,62 @@ class ShardLookupEntry final :
   std::string* _internal_mutable_probe_keys_compact();
   public:
 
+  // bytes probe_filter_columns_compact = 4;
+  void clear_probe_filter_columns_compact();
+  const std::string& probe_filter_columns_compact() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_probe_filter_columns_compact(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_probe_filter_columns_compact();
+  PROTOBUF_NODISCARD std::string* release_probe_filter_columns_compact();
+  void set_allocated_probe_filter_columns_compact(std::string* probe_filter_columns_compact);
+  private:
+  const std::string& _internal_probe_filter_columns_compact() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_probe_filter_columns_compact(const std::string& value);
+  std::string* _internal_mutable_probe_filter_columns_compact();
+  public:
+
+  // string filter_expression = 5;
+  void clear_filter_expression();
+  const std::string& filter_expression() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_filter_expression(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_filter_expression();
+  PROTOBUF_NODISCARD std::string* release_filter_expression();
+  void set_allocated_filter_expression(std::string* filter_expression);
+  private:
+  const std::string& _internal_filter_expression() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_filter_expression(const std::string& value);
+  std::string* _internal_mutable_filter_expression();
+  public:
+
+  // string probe_columns_type = 6;
+  void clear_probe_columns_type();
+  const std::string& probe_columns_type() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_probe_columns_type(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_probe_columns_type();
+  PROTOBUF_NODISCARD std::string* release_probe_columns_type();
+  void set_allocated_probe_columns_type(std::string* probe_columns_type);
+  private:
+  const std::string& _internal_probe_columns_type() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_probe_columns_type(const std::string& value);
+  std::string* _internal_mutable_probe_columns_type();
+  public:
+
+  // string filter_input_type = 7;
+  void clear_filter_input_type();
+  const std::string& filter_input_type() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_filter_input_type(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_filter_input_type();
+  PROTOBUF_NODISCARD std::string* release_filter_input_type();
+  void set_allocated_filter_input_type(std::string* filter_input_type);
+  private:
+  const std::string& _internal_filter_input_type() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_filter_input_type(const std::string& value);
+  std::string* _internal_mutable_filter_input_type();
+  public:
+
   // int32 shard_id = 1;
   void clear_shard_id();
   int32_t shard_id() const;
@@ -641,6 +765,10 @@ class ShardLookupEntry final :
     ::PROTOBUF_NAMESPACE_ID::RepeatedField< int32_t > input_indices_;
     mutable std::atomic<int> _input_indices_cached_byte_size_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr probe_keys_compact_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr probe_filter_columns_compact_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr filter_expression_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr probe_columns_type_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr filter_input_type_;
     int32_t shard_id_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
@@ -1309,6 +1437,206 @@ LookupRequest::mutable_input_indices() {
   return _internal_mutable_input_indices();
 }
 
+// bytes probe_filter_columns_compact = 5;
+inline void LookupRequest::clear_probe_filter_columns_compact() {
+  _impl_.probe_filter_columns_compact_.ClearToEmpty();
+}
+inline const std::string& LookupRequest::probe_filter_columns_compact() const {
+  // @@protoc_insertion_point(field_get:gluten.shard.proto.LookupRequest.probe_filter_columns_compact)
+  return _internal_probe_filter_columns_compact();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void LookupRequest::set_probe_filter_columns_compact(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.probe_filter_columns_compact_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:gluten.shard.proto.LookupRequest.probe_filter_columns_compact)
+}
+inline std::string* LookupRequest::mutable_probe_filter_columns_compact() {
+  std::string* _s = _internal_mutable_probe_filter_columns_compact();
+  // @@protoc_insertion_point(field_mutable:gluten.shard.proto.LookupRequest.probe_filter_columns_compact)
+  return _s;
+}
+inline const std::string& LookupRequest::_internal_probe_filter_columns_compact() const {
+  return _impl_.probe_filter_columns_compact_.Get();
+}
+inline void LookupRequest::_internal_set_probe_filter_columns_compact(const std::string& value) {
+  
+  _impl_.probe_filter_columns_compact_.Set(value, GetArenaForAllocation());
+}
+inline std::string* LookupRequest::_internal_mutable_probe_filter_columns_compact() {
+  
+  return _impl_.probe_filter_columns_compact_.Mutable(GetArenaForAllocation());
+}
+inline std::string* LookupRequest::release_probe_filter_columns_compact() {
+  // @@protoc_insertion_point(field_release:gluten.shard.proto.LookupRequest.probe_filter_columns_compact)
+  return _impl_.probe_filter_columns_compact_.Release();
+}
+inline void LookupRequest::set_allocated_probe_filter_columns_compact(std::string* probe_filter_columns_compact) {
+  if (probe_filter_columns_compact != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.probe_filter_columns_compact_.SetAllocated(probe_filter_columns_compact, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.probe_filter_columns_compact_.IsDefault()) {
+    _impl_.probe_filter_columns_compact_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:gluten.shard.proto.LookupRequest.probe_filter_columns_compact)
+}
+
+// string filter_expression = 6;
+inline void LookupRequest::clear_filter_expression() {
+  _impl_.filter_expression_.ClearToEmpty();
+}
+inline const std::string& LookupRequest::filter_expression() const {
+  // @@protoc_insertion_point(field_get:gluten.shard.proto.LookupRequest.filter_expression)
+  return _internal_filter_expression();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void LookupRequest::set_filter_expression(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.filter_expression_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:gluten.shard.proto.LookupRequest.filter_expression)
+}
+inline std::string* LookupRequest::mutable_filter_expression() {
+  std::string* _s = _internal_mutable_filter_expression();
+  // @@protoc_insertion_point(field_mutable:gluten.shard.proto.LookupRequest.filter_expression)
+  return _s;
+}
+inline const std::string& LookupRequest::_internal_filter_expression() const {
+  return _impl_.filter_expression_.Get();
+}
+inline void LookupRequest::_internal_set_filter_expression(const std::string& value) {
+  
+  _impl_.filter_expression_.Set(value, GetArenaForAllocation());
+}
+inline std::string* LookupRequest::_internal_mutable_filter_expression() {
+  
+  return _impl_.filter_expression_.Mutable(GetArenaForAllocation());
+}
+inline std::string* LookupRequest::release_filter_expression() {
+  // @@protoc_insertion_point(field_release:gluten.shard.proto.LookupRequest.filter_expression)
+  return _impl_.filter_expression_.Release();
+}
+inline void LookupRequest::set_allocated_filter_expression(std::string* filter_expression) {
+  if (filter_expression != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.filter_expression_.SetAllocated(filter_expression, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.filter_expression_.IsDefault()) {
+    _impl_.filter_expression_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:gluten.shard.proto.LookupRequest.filter_expression)
+}
+
+// string probe_columns_type = 7;
+inline void LookupRequest::clear_probe_columns_type() {
+  _impl_.probe_columns_type_.ClearToEmpty();
+}
+inline const std::string& LookupRequest::probe_columns_type() const {
+  // @@protoc_insertion_point(field_get:gluten.shard.proto.LookupRequest.probe_columns_type)
+  return _internal_probe_columns_type();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void LookupRequest::set_probe_columns_type(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.probe_columns_type_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:gluten.shard.proto.LookupRequest.probe_columns_type)
+}
+inline std::string* LookupRequest::mutable_probe_columns_type() {
+  std::string* _s = _internal_mutable_probe_columns_type();
+  // @@protoc_insertion_point(field_mutable:gluten.shard.proto.LookupRequest.probe_columns_type)
+  return _s;
+}
+inline const std::string& LookupRequest::_internal_probe_columns_type() const {
+  return _impl_.probe_columns_type_.Get();
+}
+inline void LookupRequest::_internal_set_probe_columns_type(const std::string& value) {
+  
+  _impl_.probe_columns_type_.Set(value, GetArenaForAllocation());
+}
+inline std::string* LookupRequest::_internal_mutable_probe_columns_type() {
+  
+  return _impl_.probe_columns_type_.Mutable(GetArenaForAllocation());
+}
+inline std::string* LookupRequest::release_probe_columns_type() {
+  // @@protoc_insertion_point(field_release:gluten.shard.proto.LookupRequest.probe_columns_type)
+  return _impl_.probe_columns_type_.Release();
+}
+inline void LookupRequest::set_allocated_probe_columns_type(std::string* probe_columns_type) {
+  if (probe_columns_type != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.probe_columns_type_.SetAllocated(probe_columns_type, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.probe_columns_type_.IsDefault()) {
+    _impl_.probe_columns_type_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:gluten.shard.proto.LookupRequest.probe_columns_type)
+}
+
+// string filter_input_type = 8;
+inline void LookupRequest::clear_filter_input_type() {
+  _impl_.filter_input_type_.ClearToEmpty();
+}
+inline const std::string& LookupRequest::filter_input_type() const {
+  // @@protoc_insertion_point(field_get:gluten.shard.proto.LookupRequest.filter_input_type)
+  return _internal_filter_input_type();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void LookupRequest::set_filter_input_type(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.filter_input_type_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:gluten.shard.proto.LookupRequest.filter_input_type)
+}
+inline std::string* LookupRequest::mutable_filter_input_type() {
+  std::string* _s = _internal_mutable_filter_input_type();
+  // @@protoc_insertion_point(field_mutable:gluten.shard.proto.LookupRequest.filter_input_type)
+  return _s;
+}
+inline const std::string& LookupRequest::_internal_filter_input_type() const {
+  return _impl_.filter_input_type_.Get();
+}
+inline void LookupRequest::_internal_set_filter_input_type(const std::string& value) {
+  
+  _impl_.filter_input_type_.Set(value, GetArenaForAllocation());
+}
+inline std::string* LookupRequest::_internal_mutable_filter_input_type() {
+  
+  return _impl_.filter_input_type_.Mutable(GetArenaForAllocation());
+}
+inline std::string* LookupRequest::release_filter_input_type() {
+  // @@protoc_insertion_point(field_release:gluten.shard.proto.LookupRequest.filter_input_type)
+  return _impl_.filter_input_type_.Release();
+}
+inline void LookupRequest::set_allocated_filter_input_type(std::string* filter_input_type) {
+  if (filter_input_type != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.filter_input_type_.SetAllocated(filter_input_type, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.filter_input_type_.IsDefault()) {
+    _impl_.filter_input_type_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:gluten.shard.proto.LookupRequest.filter_input_type)
+}
+
 // -------------------------------------------------------------------
 
 // LookupResponse
@@ -1529,6 +1857,206 @@ inline ::PROTOBUF_NAMESPACE_ID::RepeatedField< int32_t >*
 ShardLookupEntry::mutable_input_indices() {
   // @@protoc_insertion_point(field_mutable_list:gluten.shard.proto.ShardLookupEntry.input_indices)
   return _internal_mutable_input_indices();
+}
+
+// bytes probe_filter_columns_compact = 4;
+inline void ShardLookupEntry::clear_probe_filter_columns_compact() {
+  _impl_.probe_filter_columns_compact_.ClearToEmpty();
+}
+inline const std::string& ShardLookupEntry::probe_filter_columns_compact() const {
+  // @@protoc_insertion_point(field_get:gluten.shard.proto.ShardLookupEntry.probe_filter_columns_compact)
+  return _internal_probe_filter_columns_compact();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void ShardLookupEntry::set_probe_filter_columns_compact(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.probe_filter_columns_compact_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:gluten.shard.proto.ShardLookupEntry.probe_filter_columns_compact)
+}
+inline std::string* ShardLookupEntry::mutable_probe_filter_columns_compact() {
+  std::string* _s = _internal_mutable_probe_filter_columns_compact();
+  // @@protoc_insertion_point(field_mutable:gluten.shard.proto.ShardLookupEntry.probe_filter_columns_compact)
+  return _s;
+}
+inline const std::string& ShardLookupEntry::_internal_probe_filter_columns_compact() const {
+  return _impl_.probe_filter_columns_compact_.Get();
+}
+inline void ShardLookupEntry::_internal_set_probe_filter_columns_compact(const std::string& value) {
+  
+  _impl_.probe_filter_columns_compact_.Set(value, GetArenaForAllocation());
+}
+inline std::string* ShardLookupEntry::_internal_mutable_probe_filter_columns_compact() {
+  
+  return _impl_.probe_filter_columns_compact_.Mutable(GetArenaForAllocation());
+}
+inline std::string* ShardLookupEntry::release_probe_filter_columns_compact() {
+  // @@protoc_insertion_point(field_release:gluten.shard.proto.ShardLookupEntry.probe_filter_columns_compact)
+  return _impl_.probe_filter_columns_compact_.Release();
+}
+inline void ShardLookupEntry::set_allocated_probe_filter_columns_compact(std::string* probe_filter_columns_compact) {
+  if (probe_filter_columns_compact != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.probe_filter_columns_compact_.SetAllocated(probe_filter_columns_compact, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.probe_filter_columns_compact_.IsDefault()) {
+    _impl_.probe_filter_columns_compact_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:gluten.shard.proto.ShardLookupEntry.probe_filter_columns_compact)
+}
+
+// string filter_expression = 5;
+inline void ShardLookupEntry::clear_filter_expression() {
+  _impl_.filter_expression_.ClearToEmpty();
+}
+inline const std::string& ShardLookupEntry::filter_expression() const {
+  // @@protoc_insertion_point(field_get:gluten.shard.proto.ShardLookupEntry.filter_expression)
+  return _internal_filter_expression();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void ShardLookupEntry::set_filter_expression(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.filter_expression_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:gluten.shard.proto.ShardLookupEntry.filter_expression)
+}
+inline std::string* ShardLookupEntry::mutable_filter_expression() {
+  std::string* _s = _internal_mutable_filter_expression();
+  // @@protoc_insertion_point(field_mutable:gluten.shard.proto.ShardLookupEntry.filter_expression)
+  return _s;
+}
+inline const std::string& ShardLookupEntry::_internal_filter_expression() const {
+  return _impl_.filter_expression_.Get();
+}
+inline void ShardLookupEntry::_internal_set_filter_expression(const std::string& value) {
+  
+  _impl_.filter_expression_.Set(value, GetArenaForAllocation());
+}
+inline std::string* ShardLookupEntry::_internal_mutable_filter_expression() {
+  
+  return _impl_.filter_expression_.Mutable(GetArenaForAllocation());
+}
+inline std::string* ShardLookupEntry::release_filter_expression() {
+  // @@protoc_insertion_point(field_release:gluten.shard.proto.ShardLookupEntry.filter_expression)
+  return _impl_.filter_expression_.Release();
+}
+inline void ShardLookupEntry::set_allocated_filter_expression(std::string* filter_expression) {
+  if (filter_expression != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.filter_expression_.SetAllocated(filter_expression, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.filter_expression_.IsDefault()) {
+    _impl_.filter_expression_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:gluten.shard.proto.ShardLookupEntry.filter_expression)
+}
+
+// string probe_columns_type = 6;
+inline void ShardLookupEntry::clear_probe_columns_type() {
+  _impl_.probe_columns_type_.ClearToEmpty();
+}
+inline const std::string& ShardLookupEntry::probe_columns_type() const {
+  // @@protoc_insertion_point(field_get:gluten.shard.proto.ShardLookupEntry.probe_columns_type)
+  return _internal_probe_columns_type();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void ShardLookupEntry::set_probe_columns_type(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.probe_columns_type_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:gluten.shard.proto.ShardLookupEntry.probe_columns_type)
+}
+inline std::string* ShardLookupEntry::mutable_probe_columns_type() {
+  std::string* _s = _internal_mutable_probe_columns_type();
+  // @@protoc_insertion_point(field_mutable:gluten.shard.proto.ShardLookupEntry.probe_columns_type)
+  return _s;
+}
+inline const std::string& ShardLookupEntry::_internal_probe_columns_type() const {
+  return _impl_.probe_columns_type_.Get();
+}
+inline void ShardLookupEntry::_internal_set_probe_columns_type(const std::string& value) {
+  
+  _impl_.probe_columns_type_.Set(value, GetArenaForAllocation());
+}
+inline std::string* ShardLookupEntry::_internal_mutable_probe_columns_type() {
+  
+  return _impl_.probe_columns_type_.Mutable(GetArenaForAllocation());
+}
+inline std::string* ShardLookupEntry::release_probe_columns_type() {
+  // @@protoc_insertion_point(field_release:gluten.shard.proto.ShardLookupEntry.probe_columns_type)
+  return _impl_.probe_columns_type_.Release();
+}
+inline void ShardLookupEntry::set_allocated_probe_columns_type(std::string* probe_columns_type) {
+  if (probe_columns_type != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.probe_columns_type_.SetAllocated(probe_columns_type, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.probe_columns_type_.IsDefault()) {
+    _impl_.probe_columns_type_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:gluten.shard.proto.ShardLookupEntry.probe_columns_type)
+}
+
+// string filter_input_type = 7;
+inline void ShardLookupEntry::clear_filter_input_type() {
+  _impl_.filter_input_type_.ClearToEmpty();
+}
+inline const std::string& ShardLookupEntry::filter_input_type() const {
+  // @@protoc_insertion_point(field_get:gluten.shard.proto.ShardLookupEntry.filter_input_type)
+  return _internal_filter_input_type();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void ShardLookupEntry::set_filter_input_type(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.filter_input_type_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:gluten.shard.proto.ShardLookupEntry.filter_input_type)
+}
+inline std::string* ShardLookupEntry::mutable_filter_input_type() {
+  std::string* _s = _internal_mutable_filter_input_type();
+  // @@protoc_insertion_point(field_mutable:gluten.shard.proto.ShardLookupEntry.filter_input_type)
+  return _s;
+}
+inline const std::string& ShardLookupEntry::_internal_filter_input_type() const {
+  return _impl_.filter_input_type_.Get();
+}
+inline void ShardLookupEntry::_internal_set_filter_input_type(const std::string& value) {
+  
+  _impl_.filter_input_type_.Set(value, GetArenaForAllocation());
+}
+inline std::string* ShardLookupEntry::_internal_mutable_filter_input_type() {
+  
+  return _impl_.filter_input_type_.Mutable(GetArenaForAllocation());
+}
+inline std::string* ShardLookupEntry::release_filter_input_type() {
+  // @@protoc_insertion_point(field_release:gluten.shard.proto.ShardLookupEntry.filter_input_type)
+  return _impl_.filter_input_type_.Release();
+}
+inline void ShardLookupEntry::set_allocated_filter_input_type(std::string* filter_input_type) {
+  if (filter_input_type != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.filter_input_type_.SetAllocated(filter_input_type, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.filter_input_type_.IsDefault()) {
+    _impl_.filter_input_type_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:gluten.shard.proto.ShardLookupEntry.filter_input_type)
 }
 
 // -------------------------------------------------------------------

@@ -10,12 +10,12 @@
 #include <unordered_set>
 #include <vector>
 
-#include <folly/container/F14Map.h>
 #include <grpcpp/grpcpp.h>
 
-#include "velox/common/base/BloomFilter.h"
+#include "BloomFilter64.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -24,7 +24,6 @@
 #include "ShardLookupJoinNode.h"
 #include "SparkMurmurHash.h"
 #include "VeloxShardManager.h"
-#include "VeloxShardRpcServer.h"
 #include "proto/shard_lookup.grpc.pb.h"
 
 namespace gluten {
@@ -71,18 +70,6 @@ class ShardLookupJoin : public exec::Operator {
   }
 
   // ---------- Shard routing ----------
-
-  /// Compute Spark-compatible shard id for a probe row.
-  /// Uses SparkMurmurHash with castToBigint when hashKeyType requires it.
-  int32_t computeShardId(const RowVectorPtr& input, vector_size_t row) const;
-
-  /// Compute Spark-compatible hash for a single key column, casting to
-  /// bigint before hashing when castToBigint flag is set.
-  int32_t hashKeyColumnForShard(
-      const RowVectorPtr& input,
-      size_t keyIdx,
-      vector_size_t row,
-      int32_t seed) const;
 
   /// Record a fatal error that should propagate to the driver thread.
   void setFatalError(const std::string& message);
@@ -167,23 +154,22 @@ class ShardLookupJoin : public exec::Operator {
       int32_t shardId,
       RowVectorPtr probeKeys,
       std::vector<BufferedRow> probeRows,
-      DedupMap dedupMap);
+      DedupMap dedupMap,
+      RowVectorPtr filterProbeColumns = nullptr);
 
   /// Issue a local lookup for a shard.
   void issueLocalLookup(
       int32_t shardId,
       RowVectorPtr probeKeys,
       std::vector<BufferedRow> probeRows,
-      DedupMap dedupMap);
+      DedupMap dedupMap,
+      RowVectorPtr filterProbeColumns = nullptr);
 
   /// Called when a gRPC async RPC finishes (from drain thread).
   void handleRpcCompletion(RpcContext* ctx, bool ok);
 
   /// Enqueue a completed lookup result and wake the Driver.
   void onRpcComplete(std::unique_ptr<CompletedLookup> result);
-
-  /// Check if there are completed lookups ready to output.
-  bool hasCompletedLookup() const;
 
   /// Build a probe-side gathered column for output, using DictionaryVector
   /// wrapping wherever a contiguous run of output rows comes from the same
@@ -216,9 +202,6 @@ class ShardLookupJoin : public exec::Operator {
   RowVectorPtr produceOutputForInnerJoin(const CompletedLookup& lookup);
   RowVectorPtr produceOutputForLeftJoin(CompletedLookup& lookup);
 
-
-  /// Copy probe-side projected columns for a single row to output at outIdx.
-  void copyProbeRow(const BufferedRow& br, vector_size_t outIdx);
 
   // ---------- Output projection ----------
 
@@ -263,10 +246,28 @@ class ShardLookupJoin : public exec::Operator {
   /// Input type for filter evaluation: concat(probeType, buildOutputType).
   RowTypePtr filterInputType_;
 
-  /// Apply post-join filter on an already-assembled output RowVector.
-  /// Returns a new RowVector containing only the rows that pass the filter.
-  /// If no filter is set, returns the input unchanged.
-  RowVectorPtr applyFilter(const RowVectorPtr& output);
+  // ---------- Server-side filter pushdown ----------
+
+  /// Column indices within probeType_ that filterExpr_ references.
+  std::vector<column_index_t> filterProbeChannels_;
+
+  /// RowType of filter-referenced probe columns (subset of probeType_).
+  RowTypePtr filterProbeType_;
+
+  /// Serialized filter expression JSON (ISerializable, computed once).
+  std::string filterExprJson_;
+
+  /// Hive-format type strings (computed once in initialize).
+  std::string filterProbeTypeStr_;
+  std::string filterInputTypeStr_;
+
+  /// Server-side filter eval input type: concat(filterProbeType, buildOutputType).
+  /// Used by issueLocalLookup to pass to VeloxShardManager::lookup.
+  RowTypePtr serverFilterInputType_;
+
+  /// Cached dedup RowType when filter is active: concat(probeKeyType, filterProbeType).
+  /// Built once in initialize() to avoid per-flushShard reconstruction.
+  RowTypePtr dedupWithFilterType_;
 
   /// Decrement refCount for every BufferedRow in `rows` and erase any
   /// inputBatches_ entry whose refCount reaches zero.  Called from the
@@ -298,6 +299,22 @@ class ShardLookupJoin : public exec::Operator {
   uint64_t getOutputCalls_{0};
   uint64_t rpcIssuedCount_{0};
   uint64_t rpcCompletedCount_{0};
+
+  /// Row-count stats (incremented unconditionally; only logged when debug on).
+  uint64_t totalInputRows_{0};
+  uint64_t bfNegativeRows_{0};
+  uint64_t bfPositiveRows_{0};
+  uint64_t totalBuildOutputRows_{0};
+  uint64_t totalProducedRows_{0};
+  uint64_t flushShardCount_{0};
+  uint64_t localLookupCount_{0};
+
+  /// Cumulative timing (nanoseconds, steady_clock). Only measured when
+  /// debugEnabled_ is true to avoid rdtsc overhead on the hot path.
+  uint64_t addInputNanos_{0};
+  uint64_t flushShardNanos_{0};
+  uint64_t getOutputWaitNanos_{0};
+  uint64_t localLookupNanos_{0};
 
   /// Per-shard row buffers.
   std::unordered_map<int32_t, ShardBuffer> shardBuffers_;
@@ -361,8 +378,9 @@ class ShardLookupJoin : public exec::Operator {
   /// Reusable output vector.
   RowVectorPtr output_;
 
-  /// Bloom filter for probe-side pre-filtering.
-  BloomFilter<> bloomFilter_;
+  /// Bloom filter for probe-side pre-filtering (shared across all SLJ
+  /// instances on this executor, owned by VeloxShardManager).
+  std::shared_ptr<const BloomFilter64> bloomFilter_;
 
   /// Reusable per-batch hash buffers for addInput's columnar batch hashing.
   /// `bfHashes_` stores one int32 per row of the current input (BF hash,
@@ -377,7 +395,6 @@ class ShardLookupJoin : public exec::Operator {
 
   /// Background thread that drains the gRPC completion queue.
   std::thread drainThread_;
-  std::atomic<bool> drainRunning_{false};
 
   /// gRPC stub kept alive for the lifetime of async RPCs.
   /// Each issueRemoteLookup stores its stub in the RpcContext to prevent
